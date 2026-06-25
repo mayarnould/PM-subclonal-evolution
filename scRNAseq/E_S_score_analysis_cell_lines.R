@@ -15,7 +15,7 @@ LoadRData = function(file.name,
 }
 
 
-# Parameter --------------------------------------------------------------------
+# Load data --------------------------------------------------------------------
 gene_E_S <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S3.2")
   
 colnames(gene_E_S) <- gene_E_S[2, ]
