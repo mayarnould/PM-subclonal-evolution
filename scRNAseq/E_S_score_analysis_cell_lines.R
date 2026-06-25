@@ -70,7 +70,7 @@ E_Sscore_by_cells <- cell_E_S_scores_df %>%
         legend.position = "none")
 E_Sscore_by_cells
 
-png(file.path(image_dir, "E_Sscore_by_cells.png"), width = 612, height = 600, res = 120)
+png(file.path("E_Sscore_by_cells.png"), width = 612, height = 600, res = 120)
 print(E_Sscore_by_cells)
 dev.off()
 
