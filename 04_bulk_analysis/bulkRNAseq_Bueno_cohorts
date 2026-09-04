@@ -1,0 +1,126 @@
+library(ComplexHeatmap)
+library(readxl)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+
+#------------------------------------- Function --------------------------------
+LoadRData = function(file.name,
+                     print.dim = T,
+                     print.real.name = T) {
+  file.real.name = load(file.name, verbose = print.real.name)
+  if (print.dim) cat("dimensions: ", dim(get(file.real.name)))
+  return(get(file.real.name))
+}
+
+# Load data vst and remove MT-gene
+vst_bueno <- read.table(file.path("exp_bueno.txt")) %>% 
+  as.data.frame() %>% 
+  filter(!grepl("MT-", row.names(.)))
+
+# Deconvolution with CIBERSORTx for estimated the proportion of all immune cells
+immune_proportions <- read.table(file.path("CIBERSORTx_Bueno_Results.txt"), header=TRUE, sep="\t", row.names=1)
+immune_proportions_clean <- immune_proportions[, !(colnames(immune_proportions) %in% c("P.value", "Correlation", "RMSE"))]
+
+corrected_vst <- apply(vst_bueno, 1, function(x) {
+  formula <- as.formula(paste("x ~", paste(colnames(immune_proportions_clean), collapse = "+")))
+  lm_res <- lm(formula, data = data.frame(x = x, immune_proportions_clean))
+  residuals(lm_res)
+  
+})
+
+corrected_vst <- t(corrected_vst)
+
+# E and S genes
+table_path    <- "Supplementary_Table 1-4.xlsx"
+gene_E_S <- read_xlsx(table_path, sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+
+genes_E_S <- c(gene_S, gene_E)
+
+vst_filtered <- corrected_vst %>% 
+  as.data.frame() %>% 
+  filter(rownames(.) %in% genes_E_S)
+
+# Load metadata file
+metadata <- read_xlsx(file.path("Annotation Bueno clean.xlsx")) %>% 
+  janitor::clean_names()
+
+metadata$s_score_norm <- as.numeric(metadata$s_score_norm)
+metadata <- metadata %>% 
+  mutate(e_score_norm = 1-s_score_norm) %>% 
+  filter(!is.na(e_score_norm))
+
+metadata$sample_id <- paste0("X", metadata$rna_id)
+
+vst_filtered <- vst_filtered %>%
+    select(metadata$sample_id)
+
+### ANNOTATION ####
+if (!all(metadata$sample_id == colnames(vst_filtered))) {
+  print("WARNING: order is different so annotations won't match")
+} else {
+  print("order is the same in annotation and matrix -> keep going")
+}
+
+histo_cols_Didier <- c("Epithelioid" = "#3194CA", "Sarcomatoid" = "#B83243", "Biphasic" = "#D68340", "NA" = "grey90")
+consensus_col <- c("Epithelioid" = "#3194CA", "Biphasic-E" = "#B83243", "Biphasic-S" = "firebrick", "Sarcomatoid" = "#B83243")
+               
+set.seed(123)
+
+annotation_tumor <- HeatmapAnnotation(histology = anno_simple(metadata$hitology_eval_based_on_percent,
+                                                              width = unit(0.7, "cm"),
+                                                              height = unit(0.5, "cm"),
+                                                              col = histo_cols_Didier),
+                                      empty_3 = anno_empty(border = FALSE, height = unit(.02, "cm")),
+                                      E_S_score = anno_barplot(select(metadata, e_score_norm, s_score_norm), 
+                                                               height = unit(0.8, "cm"),
+                                                               bar_width = .95,
+                                                               gp = gpar(fill = c("#b2d1e0", "#cb4d4d"))),
+                                      empty_4 = anno_empty(border = FALSE, height = unit(.02, "cm")),
+                                      show_legend = F)
+
+centering = TRUE
+
+if (centering) {
+  vst_filtered = vst_filtered - apply(vst_filtered, 1, . %>% median(., na.rm = T))
+}
+
+col_clust_cos <- hclust(dist(t(vst_filtered), method = "euclidian"), method = "ward.D2")
+
+vst_filtered <- as.matrix(vst_filtered)
+
+clustering_cos <- Heatmap(vst_filtered, 
+                          name = NULL,
+                          heatmap_legend_param = list(title = NULL),
+                          top_annotation = annotation_tumor,
+                          cluster_columns = col_clust_cos,
+                          show_row_names = F,
+                          show_column_names = F,
+                          column_names_gp = gpar(fontsize = 10),
+                          row_names_gp = gpar(fontsize = 5),
+                          column_split = 3,
+                          row_km = 2,
+                          width = unit(18, "cm"),
+                          height = unit(11, "cm"))
+
+png(file.path("clustering_E_S_bueno_dataset.png"), width = 1100, height = 800, res = 120)
+print(clustering_cos)
+dev.off()
+
+# svg(file.path("clustering_E_S_bueno_dataset.svg"), width = 1100/120, height = 800/120)
+# print(clustering_cos)
+# dev.off()
+
+column_groups <- cutree(col_clust_cos, k = 3)
+
+cluster_data <- data.frame(
+  Tumeur = names(column_groups),
+  Cluster = as.factor(column_groups)  
+)
+
+write.table(cluster_data, file.path("clustering_k3_bueno.txt"), sep = "\t")
+
