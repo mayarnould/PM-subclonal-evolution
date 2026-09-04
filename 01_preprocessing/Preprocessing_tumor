@@ -1,0 +1,222 @@
+library(dplyr)
+library(Seurat)
+library(tidyr)
+
+# Function ---------------------------------------------------------
+GetGenesFromSeuratObject <- function(MPM, gene_list, layer = "data", assay = "RNA") {
+  genes_absent_from_seurat_object <- setdiff(gene_list, rownames(MPM))
+  if (length(genes_absent_from_seurat_object) == length(gene_list)) stop("no genes are found in the seurat object")
+  if (length(genes_absent_from_seurat_object) > 0)  print(glue::glue("Warning, the following genes are not present in the seurat object and therefore have been ignored for the score:
+                   {paste(genes_absent_from_seurat_object, collapse = ', ')}"))
+  DefaultAssay(MPM) <- assay
+  GetAssayData(object = MPM, 
+               layer = layer)[intersect(rownames(MPM), gene_list), , drop = F]
+}
+
+
+AddScoreAsMeanOfGenes <- function(MPM,
+                                  gene_list,
+                                  score_name,
+                                  layer = "data",
+                                  assay = "RNA") {
+  print(glue::glue("\n\ncreating a score and adding it to the metadata as {score_name}"))
+  MPM@meta.data[, score_name] <- apply(GetGenesFromSeuratObject(MPM = MPM,
+                                                                gene_list = gene_list,
+                                                                layer = layer,
+                                                                assay = assay),
+                                       2, mean)
+  return(MPM)
+}
+
+fix.sc_affy <- scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20'))
+
+# Parameter ---------------------------------------------------------
+name_tumors <- c("T267", "T278_C", "T343_C", "T043", "T093", "T094", "T201_B", "T038", 
+                 "T161NE", "T111NE", "T277HP-A", "T325HP", "T227LE-A", "T255HP", "T265HP")[1]
+
+indix <- which(name_tumors == c("T267", "T278_C", "T343_C", "T043", "T093", "T094", "T201_B", "T038", 
+                                "T161NE", "T111NE", "T277HP-A", "T325HP", "T227LE-A", "T255HP", "T265HP"))
+
+
+tumors <- c("T267/filtered_feature_bc_matrix/", 
+            "T278_C/filtered_feature_bc_matrix/", 
+            "T343_C/filtered_feature_bc_matrix/",
+            "T043/filtered_feature_bc_matrix/",
+            "T093/filtered_feature_bc_matrix/",
+            "T094/filtered_feature_bc_matrix/",
+            "T201_B/filtered_feature_bc_matrix/",
+            "T038/filtered_feature_bc_matrix/",
+            "T161NE/filtered_feature_bc_matrix/",
+            "T111NE/filtered_feature_bc_matrix/",
+            "T277HP-A/filtered_feature_bc_matrix/",
+            "T325HP/filtered_feature_bc_matrix/",
+            "T227LE-A/filtered_feature_bc_matrix/",
+            "T255HP/filtered_feature_bc_matrix/",
+            "T265HP/filtered_feature_bc_matrix/")[indix]
+
+
+cut_off_features <- 500
+cut_off_MT <- 5
+n_count <- 1000
+
+# Load data --------------------------------------------------------------------
+MPM_data <- Read10X(file.path(datadir, tumors))
+MPM <- CreateSeuratObject(counts = MPM_data, project = name_tumors)
+MPM[["percent.mt"]] <- PercentageFeatureSet(MPM, pattern = "^MT-")
+MPM_filtre_MT <- subset(MPM, subset = percent.mt < cut_off_MT)
+MPM_filtre_ncount <- subset(MPM_filtre_MT, subset = nCount_RNA > n_count)
+MPM_filtre <- subset(MPM_filtre_ncount, subset = nFeature_RNA > cut_off_features)
+
+# Normalization
+MPM_filtre <- NormalizeData(MPM_filtre, normalization.method = "LogNormalize", scale.factor = 10000)
+MPM_filtre <- SCTransform(MPM_filtre, vst.flavor = "v2", verbose = TRUE)
+MPM_filtre <- RunPCA(MPM_filtre, features = VariableFeatures(object = MPM_filtre))
+MPM_filtre <- FindNeighbors(MPM_filtre, dims = 1:10)
+MPM_filtre <- FindClusters(MPM_filtre, resolution = 0.5)
+MPM_filtre <- RunUMAP(MPM_filtre, dims = 1:10)
+
+
+UMAP <- DimPlot(MPM_filtre, reduction = "umap", label = FALSE)
+UMAP
+
+save(MPM_filtre, file = file.path(glue::glue("MPM_{name_tumors}_filtre.Rdata")))
+
+# Merge all sample --------------------------------
+MPM_merge <- merge(MPM_T267_filtre, y = c(MPM_T278_C_filtre, MPM_T343_C_filtre, MPM_T043_filtre, 
+                                                   MPM_T093_filtre, MPM_T094_filtre, MPM_T201_B_filtre, MPM_T038_filtre,
+                                                   MPM_T161NE_filtre, MPM_T111NE_filtre, MPM_T277HP-A_filtre,
+                                                   MPM_T325HP_filtre, MPM_T227LE-A_filtre, MPM_T255HP_filtre, MPM_T265HP_filtre))
+
+MPM_merge <- NormalizeData(MPM_merge, normalization.method = "LogNormalize", scale.factor = 10000, assay = "RNA")
+
+# Apply sctransform normalization
+MPM_merge <- SCTransform(MPM_merge, vst.flavor = "v2", verbose = TRUE, assay = "RNA")
+MPM_merge <- RunPCA(MPM_merge, features = VariableFeatures(object = MPM_merge))
+MPM_merge <- FindNeighbors(MPM_merge, dims = 1:10)
+MPM_merge <- FindClusters(MPM_merge, resolution = 0.5)
+MPM_merge <- RunUMAP(MPM_merge, dims = 1:10)
+
+markers <- read_xlsx("Supplementary_Table 1-4.xlsx",
+                     sheet = "Table S2.1", skip = 2)
+
+# load immune/stromal markers genes
+genes_markers <- markers %>%
+  pivot_longer(everything(),
+               names_to  = "Cell.population",
+               values_to = "HUGO.symbols") %>%
+  filter(!is.na(HUGO.symbols), HUGO.symbols != "") %>%
+  mutate(Cell.population = gsub(" ", "_", trimws(Cell.population)),
+         HUGO.symbols    = trimws(HUGO.symbols))
+
+table(genes_markers$Cell.population)
+
+## --- Add one score per population ------------------------------------------
+for (pop in unique(genes_markers$Cell.population)) {
+  MPM_merge <- MPM_merge %>%
+    AddScoreAsMeanOfGenes(
+      gene_list  = filter(genes_markers, Cell.population == pop)$HUGO.symbols,
+      score_name = pop)
+}
+
+UMAP <- DimPlot(MPM_merge, reduction = "umap", label = FALSE, group.by = "orig.ident",
+                cols = c("T267" = "#b15928", "T278_C" = "#cab2d6", "T343_C" = "#6a3d9a", "T043" = "#1f77b4",
+                         "T093" = "#ff7f0e", "T094" = "#2ca02c", "T201_B" = "#d62728", "T038" = "#e377c2", "T161NE" = "#98df8a", 
+                         "T277HP-A" = "#bcbd22", "T111NE" = "#ffbb78", "T325HP" = "#aec7e8", "T227LE-A" = "#17becf", "T255HP" = "#7f7f7f", 
+                         "T265HP" = "#ff9896"))
+
+FeaturePlot(MPM_merge, feature = "T_cells") + fix.sc_affy
+FeaturePlot(MPM_merge, feature = "B_cells") + fix.sc_affy
+FeaturePlot(MPM_merge, feature = "Endothelial_cells") + fix.sc_affy
+FeaturePlot(MPM_merge, feature = "Macrophages") + fix.sc_affy
+FeaturePlot(MPM_merge, feature = "Fibroblasts") + fix.sc_affy
+
+UMAP_cluster_id <- DimPlot(MPM_merge, reduction = "umap", label = FALSE, group.by = "final_cluster_id",
+                           cols = c("T cells" = "#3897FF", "B cells" = "#B03CFF", "Macrophages" = "#8C4B16", "Neutrophiles" = "#FEC046", 
+                                    "Endothelial cells" = "#17BECF", "Fibroblast" = "#01AF02", "Other" = "grey",
+                                    "Tumor cells" = "indianred"))
+
+# load sc-E and sc-S markers genes
+gene_E_S <- read_xlsx("Supplementary_Table 1-4.xlsx", sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+gene_E <- intersect(gene_E, rownames(MPM_merge))
+gene_S <- intersect(gene_S, rownames(MPM_merge))
+
+## --- Add one score per population ------------------------------------------
+MPM_merge <- AddScoreAsMeanOfGenes(MPM_merge, gene_list = unique(gene_E),
+                                   score_name = "E_score")
+MPM_merge <- AddScoreAsMeanOfGenes(MPM_merge, gene_list = unique(gene_S),
+                                   score_name = "S_score")
+
+FeaturePlot(MPM_merge, feature = "E_score") + fix.sc_affy
+FeaturePlot(MPM_merge, feature = "S_score") + fix.sc_affy
+
+# Distribution of main metrics -------------------------------------------------
+col_tumors <- c("T267" = "#b15928", "T278_C" = "#cab2d6", "T343_C" = "#6a3d9a", "T043" = "#1f77b4",
+                "T093" = "#ff7f0e", "T094" = "#2ca02c", "T201_B" = "#d62728", "T038" = "#e377c2", "T161NE" = "#98df8a", 
+                "T277HP-A" = "#bcbd22", "T111NE" = "#ffbb78", "T325HP" = "#aec7e8", "T227LE-A" = "#17becf", "T255HP" = "#7f7f7f", 
+                "T265HP" = "#ff9896")
+
+# Calculate the median of the counts per sample
+df_summary <- MPM_merge@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(median_count = median(nCount_RNA))
+
+# Sort the samples by the median
+MPM_merge@meta.data$orig.ident <- factor(MPM_merge@meta.data$orig.ident, 
+                                         levels = df_summary$orig.ident[order(df_summary$median_count)])
+
+MPM_merge@meta.data %>% 
+  ggplot(aes(x = orig.ident, y = nCount_RNA)) +
+  geom_violin(aes(fill = orig.ident)) +
+  scale_fill_manual(values = col_tumors, "tumors") +
+  scale_y_continuous(breaks = seq(0, 1.5e6, by = 2e4), labels = seq(0, 150, by = 2),
+                     name = "nCount_RNA (10^4)") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_text(size = 15),
+        legend.text = element_blank())
+
+# Calculate the median of the nfeatures per sample
+df_summary <- MPM_merge@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(median_count = median(nFeature_RNA))
+
+# Sort the samples by the median
+MPM_merge@meta.data$orig.ident <- factor(MPM_merge@meta.data$orig.ident, 
+                                         levels = df_summary$orig.ident[order(df_summary$median_count)])
+
+MPM_merge@meta.data %>% 
+  ggplot(aes(x = orig.ident, y = nFeature_RNA)) +
+  geom_violin(aes(fill = orig.ident)) +
+  scale_fill_manual(values = col_tumors, "tumors") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_text(size = 15),
+        legend.text = element_blank())
+
+# Calculate the median of percent mt per sample
+df_summary <- MPM_merge@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(median_count = median(percent.mt))
+
+# Sort the samples by the median
+MPM_merge@meta.data$orig.ident <- factor(MPM_merge@meta.data$orig.ident, 
+                                         levels = df_summary$orig.ident[order(df_summary$median_count)])
+
+MPM_merge@meta.data %>% 
+  ggplot(aes(x = orig.ident, y = percent.mt)) +
+  geom_violin(aes(fill = orig.ident)) +
+  scale_fill_manual(values = col_tumors, "tumors") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_text(size = 15),
+        legend.text = element_blank())
