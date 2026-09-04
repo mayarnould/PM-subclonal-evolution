@@ -1,0 +1,244 @@
+library(dplyr)
+library(Seurat)
+library(tidyr)
+
+# Function ---------------------------------------------------------
+GetGenesFromSeuratObject <- function(MPM, gene_list, layer = "data", assay = "RNA") {
+  genes_absent_from_seurat_object <- setdiff(gene_list, rownames(MPM))
+  if (length(genes_absent_from_seurat_object) == length(gene_list)) stop("no genes are found in the seurat object")
+  if (length(genes_absent_from_seurat_object) > 0)  print(glue::glue("Warning, the following genes are not present in the seurat object and therefore have been ignored for the score:
+                   {paste(genes_absent_from_seurat_object, collapse = ', ')}"))
+  DefaultAssay(MPM) <- assay
+  GetAssayData(object = MPM, 
+               layer = layer)[intersect(rownames(MPM), gene_list), , drop = F]
+}
+
+
+AddScoreAsMeanOfGenes <- function(MPM,
+                                  gene_list,
+                                  score_name,
+                                  layer = "data",
+                                  assay = "RNA") {
+  print(glue::glue("\n\ncreating a score and adding it to the metadata as {score_name}"))
+  MPM@meta.data[, score_name] <- apply(GetGenesFromSeuratObject(MPM = MPM,
+                                                                gene_list = gene_list,
+                                                                layer = layer,
+                                                                assay = assay),
+                                       2, mean)
+  return(MPM)
+}
+
+fix.sc_affy <- scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20'))
+
+# Parameter ---------------------------------------------------------
+
+name_cell_line <- c("MPM05", "MPM07", "MPM59", "MPM87", "MPM60", "MPM37", "MPM12", "MPM78", "MPM27", 
+                    "MPM86", "MPM70", "MPM28", "MPM16", "MPM82")[15]
+
+indix <- which(name_cell_line == c("MPM05", "MPM07", "MPM59", "MPM87", "MPM60", "MPM37", "MPM12", "MPM78", "MPM27", 
+                                   "MPM86", "MPM70", "MPM28", "MPM16", "MPM82"))
+
+cell_line <- c("MPM05/filtered_feature_bc_matrix/", 
+               "MPM07/filtered_feature_bc_matrix/", 
+               "MPM59/filtered_feature_bc_matrix/",
+               "MPM87/filtered_feature_bc_matrix/",
+               "MPM60/filtered_feature_bc_matrix/",
+               "MPM37/filtered_feature_bc_matrix/",
+               "MPM12/filtered_feature_bc_matrix/",
+               "MPM78/filtered_feature_bc_matrix/",
+               "MPM27/filtered_feature_bc_matrix/",
+               "MPM86/filtered_feature_bc_matrix/",
+               "MPM70/filtered_feature_bc_matrix/",
+               "MPM28/filtered_feature_bc_matrix/",
+               "MPM16/filtered_feature_bc_matrix/",
+               "MPM82/filtered_feature_bc_matrix/")[indix]
+
+cut_off_type <- c("commun", "specifique")[2]
+
+
+if(cut_off_type == "commun") {
+  cut_off_features <- 200
+  cut_off_MT <- 15
+} else {
+  cut_off_features <- c(3000, 3500, 3500, 1000, 3000, 5000, 3000, 3000, 3000, 2000, 4000, 3500, 500, 500, 500) [indix]
+  cut_off_MT <- c(12, 16, 12, 10, 15, 10, 12, 12, 15, 10, 14, 15, 20, 15, 15)[indix]
+  n_count <- c(170000, 100000, 130000, 25000, 85000, 130000, 100000, 115000, 100000, 100000, 190000, 90000, 95000, 130000, 135000)[indix]
+}
+
+# Load data --------------------------------------------------------------------
+MPM_data <- Read10X(file.path(datadir, tumors))
+MPM <- CreateSeuratObject(counts = MPM_data, project = name_tumors)
+MPM[["percent.mt"]] <- PercentageFeatureSet(MPM, pattern = "^MT-")
+MPM_filtre_MT <- subset(MPM, subset = percent.mt < cut_off_MT)
+MPM_filtre_ncount <- subset(MPM_filtre_MT, subset = nCount_RNA > n_count)
+MPM_filtre <- subset(MPM_filtre_ncount, subset = nFeature_RNA > cut_off_features)
+
+# Normalization
+MPM_filtre <- NormalizeData(MPM_filtre, normalization.method = "LogNormalize", scale.factor = 10000)
+MPM_filtre <- FindVariableFeatures(MPM_filtre, selection.method = "vst", nfeatures = 2000)
+
+# regression on cell cyle
+s.genes <- cc.genes$s.genes %>% intersect(rownames(GetAssayData(MPM_filtre)))
+g2m.genes <- cc.genes$g2m.genes %>% intersect(rownames(GetAssayData(MPM_filtre)))
+
+MPM_filtre <- CellCycleScoring(MPM_filtre, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+MPM_filtre <- ScaleData(MPM_filtre, vars.to.regress = c("S.Score", "G2M.Score"), features = rownames(MPM_filtre))
+
+MPM_filtre <- RunPCA(MPM_filtre, features = VariableFeatures(object = MPM_filtre))
+MPM_filtre <- FindNeighbors(MPM_filtre, dims = 1:10)
+MPM_filtre <- FindClusters(MPM_filtre, resolution = 0.5)
+MPM_filtre <- RunUMAP(MPM_filtre, dims = 1:10)
+
+UMAP <- DimPlot(MPM_merge, reduction = "umap", label = FALSE)
+UMAP
+
+# Merge all sample --------------------------------
+MPM_merge <- merge(MPM05_filtre, y = c(MPM07_filtre, MPM59_filtre, MPM87_filtre, 
+                                       MPM60_filtre, MPM37_filtre, MPM12_filtre, MPM78_filtre,
+                                       MPM27_filtre, MPM86_filtre, MPM70_filtre,
+                                       MPM28_filtre, MPM16_filtre, MPM82_filtre))
+
+# Normalize ----------------------------------------------------------
+MPM_merge <- NormalizeData(MPM_merge, normalization.method = "LogNormalize", scale.factor = 10000)
+MPM_merge <- FindVariableFeatures(MPM_merge, selection.method = "vst", nfeatures = 2000)
+MPM_merge <- ScaleData(MPM_merge, vars.to.regress = c("S.Score", "G2M.Score"), features = rownames(MPM_merge))
+MPM_merge <- RunPCA(MPM_merge, features = VariableFeatures(object = MPM_merge))
+MPM_merge <- FindNeighbors(MPM_merge, dims = 1:10)
+MPM_merge <- FindClusters(MPM_merge, resolution = 0.5)
+MPM_merge <- RunUMAP(MPM_merge, dims = 1:10)
+
+#load sc-E and sc-S markers genes
+gene_E_S <- read_xlsx("Supplementary_Table 1-4.xlsx", sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+gene_E <- intersect(gene_E, rownames(MPM_merge))
+gene_S <- intersect(gene_S, rownames(MPM_merge))
+
+## --- Add one score per population ------------------------------------------
+MPM_merge <- AddScoreAsMeanOfGenes(MPM_merge, gene_list = unique(gene_E),
+                                   score_name = "E_score")
+MPM_merge <- AddScoreAsMeanOfGenes(MPM_merge, gene_list = unique(gene_S),
+                                   score_name = "S_score")
+
+FeaturePlot(MPM_merge, feature = "E_score", reduction = "pca") + fix.sc_affy
+FeaturePlot(MPM_merge, feature = "S_score", reduction = "pca") + fix.sc_affy
+
+UMAP <- DimPlot(MPM_merge, reduction = "umap", label = FALSE, group.by = "orig.ident",
+                cols = c("MPM05" = "#a6cee3", "MPM07" = "#1f78b4", "MPM12" = "#b2df8a", "MPM27" = "#33a02c", "MPM28" = "#FF5B6F",
+                         "MPM37" = "#e31a1c", "MPM59" = "#5EBC88", "MPM60" = "#ff7f00", "MPM70" = "#cab2d6", "MPM86" = "#6a3d9a",
+                         "MPM87" = "#FADF00", "MPM78" = "#b15928", "MPM16" = "#4230E2", "MPM82" = "#ff9896"))
+
+UMAP
+
+# PCA plot ---------------------------------------------------------------------
+MPM_merge <- AddMetaData(MPM_merge, as.data.frame(Embeddings(MPM_merge, "pca")[, 1:5]))
+
+col_cell_lines <- c("MPM05" = "#a6cee3", "MPM07" = "#1f78b4", "MPM12" = "#b2df8a", "MPM27" = "#33a02c", "MPM28" = "#FF5B6F",
+                    "MPM37" = "#e31a1c", "MPM59" = "#5EBC88", "MPM60" = "#ff7f00", "MPM70" = "#cab2d6", "MPM86" = "#6a3d9a",
+                    "MPM87" = "#FADF00", "MPM78" = "#b15928", "MPM16" = "#4230E2", "MPM82" = "#ff9896")
+
+MPM_merge@meta.data %>% 
+  .[sample(1:nrow(.)), ] %>% 
+  ggplot(aes(x = PC_1, y = PC_2, color = orig.ident)) +
+  geom_point(size = 0.8) +
+  scale_color_manual(values = col_cell_lines) +
+  labs(x = "PC 1 (14.6%)", y = "PC 2 (10%)") +
+  scale_x_continuous(limits  = c(NA, 35), breaks = 10*(-5:5)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(size = 16, colour = "black"),
+        axis.text.y = element_text(size = 16, colour = "black"),
+        axis.title.x = element_text(size = 16, colour = "black"),
+        axis.title.y = element_text(size = 16, colour = "black"),
+        legend.text = element_blank(),
+        legend.position = "none",
+        legend.title = element_blank())
+
+# Distribution of main metrics -------------------------------------------------
+# Calculate the median of the counts per sample
+df_summary <- MPM_merge@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(median_count = median(nCount_RNA))
+
+# Sort the samples by the median
+MPM_merge@meta.data$orig.ident <- factor(MPM_merge@meta.data$orig.ident, 
+                                        levels = df_summary$orig.ident[order(df_summary$median_count)])
+
+MPM_merge@meta.data %>% 
+  ggplot(aes(x = orig.ident, y = nCount_RNA)) +
+  geom_violin(aes(fill = orig.ident)) +
+  scale_fill_manual(values = col_cell_lines, "cell lines") +
+  scale_y_continuous(breaks = seq(0, 1.5e6, by = 2e4), labels = seq(0, 150, by = 2),
+                     name = "nCount_RNA (10^4)") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_text(size = 15),
+        legend.text = element_blank())
+
+# Calculate the median of the nfeatures per sample
+df_summary <- MPM_merge@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(median_count = median(nFeature_RNA))
+
+# Sort the samples by the median
+MPM_merge@meta.data$orig.ident <- factor(MPM_merge@meta.data$orig.ident, 
+                                        levels = df_summary$orig.ident[order(df_summary$median_count)])
+
+MPM_merge@meta.data %>% 
+  ggplot(aes(x = orig.ident, y = nFeature_RNA)) +
+  geom_violin(aes(fill = orig.ident)) +
+  scale_fill_manual(values = col_cell_lines, "cell lines") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_text(size = 15),
+        legend.text = element_blank())
+
+# Calculate the median of percent mt per sample
+df_summary <- MPM_merge@meta.data %>%
+  group_by(orig.ident) %>%
+  summarise(median_count = median(percent.mt))
+
+# Sort the samples by the median
+MPM_merge@meta.data$orig.ident <- factor(MPM_merge@meta.data$orig.ident, 
+                                        levels = df_summary$orig.ident[order(df_summary$median_count)])
+
+MPM_merge@meta.data %>% 
+  ggplot(aes(x = orig.ident, y = percent.mt)) +
+  geom_violin(aes(fill = orig.ident)) +
+  scale_fill_manual(values = col_cell_lines, "cell lines") +
+  theme_bw() +
+  theme(axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_text(size = 15),
+        legend.text = element_blank())
+
+# Cell cycling
+cell_cycling_df <- MPM_merge@meta.data %>% 
+  mutate(cell_states = ifelse(Phase == "G1", "rest", "cycling")) %>% 
+  group_by(orig.ident) %>% 
+  count(cell_states) %>% 
+  mutate(ProportionCycling = n/sum(n))
+
+cell_cycling_df <- cell_cycling_df %>% 
+  filter(cell_states == "cycling")
+
+# Sort the samples by the median
+cell_cycling_df$orig.ident <- factor(cell_cycling_df$orig.ident, levels = cell_cycling_df$orig.ident[order(cell_cycling_df$ProportionCycling)])
+
+cell_cycling_df %>% 
+        ggplot(aes(x = orig.ident, y = ProportionCycling, fill = orig.ident)) +
+        geom_bar(stat = "identity") +
+        scale_fill_manual(values = col_cell_lines, "cell lines") +
+        theme_bw() +
+        theme(axis.text.x = element_text(size = 12, color = "black", angle = 45, hjust = 1),
+              axis.title.x = element_text(size = 15), 
+              axis.text.y = element_text(size = 15, color = "black"),
+              axis.title.y = element_text(size = 15),
+              legend.text = element_blank())
+
