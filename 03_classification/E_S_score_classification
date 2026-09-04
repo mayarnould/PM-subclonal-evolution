@@ -1,0 +1,163 @@
+library(Seurat)
+library(dplyr)
+library(readxl)
+library(ggplot2)
+
+results_dir <- "results_classification_tumor"
+dir.create(results_dir, showWarnings = FALSE)
+
+## ---------------------------------------------------------------------------
+## 1. PARAMETERS
+## ---------------------------------------------------------------------------
+
+obj_path      <- "obj_snRNAseq_tumor.rds"   # or obj_scRNAseq_cell_lines.rds
+table_path    <- "Supplementary_Table 1-4.xlsx"
+dataset_label <- "tumors"                    # or "cell_lines"
+
+FIXED_MAX_E <- NULL
+FIXED_MAX_S <- NULL
+
+if (dataset_label == "cell_lines") {
+  THR_T  <- 0.40    
+  THR_R1 <- 0.50  
+  THR_R2 <- 0.82 
+  
+}
+
+if (dataset_label == "tumors") {
+  THR_T  <- 0.30    
+  THR_R1 <- 0.40  
+  THR_R2 <- 0.70 
+  
+}
+
+## ---------------------------------------------------------------------------
+## 2. SCORES
+## ---------------------------------------------------------------------------
+
+gene_E_S <- read_xlsx(table_path, sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+
+obj  <- readRDS(obj_path)
+
+if (dataset_label == "tumors") {
+  obj <- obj %>% 
+    subset(final_type == "tumor")
+}
+
+expr <- GetAssayData(obj, assay = "RNA", slot = "data")
+gene_E <- intersect(gene_E, rownames(expr))
+gene_S <- intersect(gene_S, rownames(expr))
+message("Genes E : ", length(gene_E), " | Genes S : ", length(gene_S))
+
+df <- data.frame(
+  sample    = as.character(obj$orig.ident),
+  epi_raw   = Matrix::colMeans(expr[gene_E, , drop = FALSE]),
+  sarco_raw = Matrix::colMeans(expr[gene_S, , drop = FALSE]),
+  stringsAsFactors = FALSE
+)
+df$sample <- sub("^MPM_?", "MPM_", df$sample)
+
+maxE <- if (is.null(FIXED_MAX_E)) max(df$epi_raw)   else FIXED_MAX_E
+maxS <- if (is.null(FIXED_MAX_S)) max(df$sarco_raw) else FIXED_MAX_S
+
+cat(sprintf("\nScale constants: maxE = %.6f | maxS = %.6f\n", maxE, maxS))
+
+df$E <- df$epi_raw   / maxE
+df$S <- df$sarco_raw / maxS
+df$T <- df$E + df$S
+df$r <- df$S / (df$S + df$E)
+
+## ---------------------------------------------------------------------------
+## 3. PUBLISHED LABELS
+## ---------------------------------------------------------------------------
+
+published_cell_lines <- c(
+  MPM_05 = "sc-E",  MPM_07 = "sc-E",  MPM_16 = "sc-E",  MPM_59 = "sc-E",
+  MPM_60 = "sc-E",  MPM_87 = "sc-E",
+  MPM_27 = "sc-I",  MPM_37 = "sc-I",  MPM_78 = "sc-I",  MPM_82 = "sc-I",
+  MPM_12 = "sc-ND", MPM_86 = "sc-ND",
+  MPM_28 = "sc-S",  MPM_70 = "sc-S"
+)
+published_tumors <- c(
+  "T094" = "sc-E",  "T161NE" = "sc-E",  "T201_B" = "sc-E",  "T265HP" = "sc-E",
+  "T277HP-A" = "sc-E",  "T325HP" = "sc-E",  "T343_C" = "sc-E",
+  "T111NE" = "sc-I",  "T227LE-A" = "sc-ND",
+  "T043" = "sc-S",  "T093" = "sc-S",  "T255HP" = "sc-S",
+  "T038" = "sc-I/sc-S", "T267" = "sc-I/sc-S", "T278_C" = "sc-I/sc-S"
+)
+published <- if (dataset_label == "cell_lines") published_cell_lines else published_tumors
+
+## ---------------------------------------------------------------------------
+## 4. LABELS WITH THRESHOLDS
+## ---------------------------------------------------------------------------
+
+label_from <- function(t, r) {
+  if (!is.finite(t))   return(NA_character_)
+  if (t < THR_T)       return("sc-ND")
+  if (!is.finite(r))   return("sc-ND")
+  if (r < THR_R1)      return("sc-E")
+  if (r < THR_R2)      return("sc-I")
+  "sc-S"
+}
+
+## ---------------------------------------------------------------------------
+## 5. CLASSIFICATION
+## ---------------------------------------------------------------------------
+
+classify_one <- function(sub) {
+  n  <- nrow(sub)
+  ok <- is.finite(sub$r) & is.finite(sub$T)
+  sub_ok <- sub[ok, ]
+  if (nrow(sub_ok) < 50)
+    return(data.frame(n = n, T_med = NA, r_med = NA, assigned = NA_character_))
+  T_med <- median(sub_ok$T, na.rm = TRUE)
+  r_med <- median(sub_ok$r, na.rm = TRUE)
+  data.frame(n = n, T_med = T_med, r_med = r_med,
+             assigned = label_from(T_med, r_med))
+}
+
+manquants <- setdiff(unique(df$sample), names(published))
+if (length(manquants))
+  warning("Samples missing from 'published': ", paste(manquants, collapse = ", "))
+en_trop <- setdiff(names(published), unique(df$sample))
+if (length(en_trop))
+  warning("Labels with no matching sample: ", paste(en_trop, collapse = ", "))
+
+res <- df %>% group_split(sample) %>%
+  lapply(function(s) cbind(sample = s$sample[1], classify_one(s))) %>%
+  bind_rows() %>%
+  mutate(publie = published[sample], accord = assigned == publie) %>%
+  arrange(publie, r_med)
+
+cat("\n=== FINAL CLASSIFICATION ===\n")
+print(as.data.frame(res), digits = 3)
+cat("\nAgreement :", sum(res$accord, na.rm = TRUE), "/", nrow(res), "\n")
+
+write.csv(res, file.path(results_dir, paste0("final_classification_", dataset_label, ".csv")),
+          row.names = FALSE)
+
+## ---------------------------------------------------------------------------
+## 7. SENSITIVITY OF THE THREE THRESHOLDS
+## ---------------------------------------------------------------------------
+
+invariance <- function(res, thr_T, thr_r1, thr_r2) {
+  r <- res$r_med[res$T_med >= thr_T]          
+  t <- res$T_med
+  gap <- function(v, s) c(bas = max(v[v < s]), haut = min(v[v > s]))
+  rbind(
+    THR_T  = c(value = thr_T,  gap(t, thr_T)),
+    THR_R1 = c(value = thr_r1, gap(r, thr_r1)),
+    THR_R2 = c(value = thr_r2, gap(r, thr_r2))
+  )
+}
+
+inv <- invariance(res, THR_T, THR_R1, THR_R2)
+inv <- cbind(inv,
+             marge_bas  = round(100 * (inv[, "value"] - inv[, "low"])  / inv[, "value"], 1),
+             marge_haut = round(100 * (inv[, "top"] - inv[, "value"]) / inv[, "value"], 1))
+print(round(inv, 3))
+
