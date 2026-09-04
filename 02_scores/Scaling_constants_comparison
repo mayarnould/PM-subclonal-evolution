@@ -1,0 +1,145 @@
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+
+# Parameter --------------------------------------------------------------------
+dataset <- "cell_lines"   # "cell_lines" or "tumors"
+
+obj_path <- if (dataset == "cell_lines") "obj_scRNAseq_cell_lines.rds" else
+  "obj_snRNAseq_tumor.rds"
+
+# Actual thresholds (max normalization)
+THR <- if (dataset == "cell_lines") c(T = 0.40, r1 = 0.50, r2 = 0.82) else
+  c(T = 0.30, r1 = 0.40, r2 = 0.70)
+
+# Only for tumor samples
+col_celltype <- "final_cluster_id"
+lab_tumor    <- "Tumor cells"
+
+set.seed(42)
+results_dir <- "results_seuil_E_S_cell_linesr"
+dir.create(results_dir, showWarnings = FALSE)
+
+
+# Signatures -------------------------------------------------------------------
+gene_E_S <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S3.2")
+
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+
+# Raw scores -----------------------------------------------------------------
+obj <- readRDS(file.path(obj_path))
+
+if (dataset == "tumors") {
+  obj <- subset(obj,
+                cells = colnames(obj)[
+                  obj@meta.data[[col_celltype]] == lab_tumor])
+}
+
+obj$epi_score   <- apply(GetAssayData(object = obj, assay = "RNA",
+                                      slot = "data")[gene_E, ], 2, mean)
+obj$sarco_score <- apply(GetAssayData(object = obj, assay = "RNA",
+                                      slot = "data")[gene_S, ], 2, mean)
+
+cell_E_S_scores_df <- obj@meta.data %>%
+  select(epi_mean   = epi_score,
+         sarco_mean = sarco_score,
+         nCount_RNA,
+         nFeature_RNA,
+         percent.mt,
+         orig.ident)
+
+# Normalization constants --------------------------------------------------
+constante <- function(x, methode) {
+  switch(methode,
+         max    = max(x),
+         p99    = as.numeric(quantile(x, 0.99)),
+         p95    = as.numeric(quantile(x, 0.95)))
+}
+
+methodes <- c("max", "p99", "p95")
+
+tab_const <- lapply(methodes, function(m) {
+  cE <- constante(cell_E_S_scores_df$epi_mean,   m)
+  cS <- constante(cell_E_S_scores_df$sarco_mean, m)
+  data.frame(methode = m, cE = cE, cS = cS, rapport_cE_cS = cE / cS)
+}) %>% bind_rows()
+
+
+cE_ref <- tab_const$cE[tab_const$methode == "max"]
+cS_ref <- tab_const$cS[tab_const$methode == "max"]
+tab_const <- tab_const %>%
+  mutate(facteur_T = (cE_ref / cE + cS_ref / cS) / 2,
+         THR_T_ajuste = THR["T"] * facteur_T)
+
+cat("\n===== NORMALIZATION CONSTANTS =====\n")
+print(tab_const %>% mutate(across(where(is.numeric), \(x) signif(x, 4))),
+      row.names = FALSE)
+
+# Classification for each standardization --------------------------------------
+classer <- function(med_T, med_r, thr_T, thr_r1, thr_r2) {
+  if (is.na(med_T) || is.na(med_r)) return(NA_character_)
+  if (med_T < thr_T)  return("sc-ND")
+  if (med_r < thr_r1) return("sc-E")
+  if (med_r < thr_r2) return("sc-I")
+  "sc-S"
+}
+
+res_cell <- list()
+res_ech  <- list()
+
+for (m in methodes) {
+  
+  cE <- tab_const$cE[tab_const$methode == m]
+  cS <- tab_const$cS[tab_const$methode == m]
+  thrT <- tab_const$THR_T_ajuste[tab_const$methode == m]
+  
+  d <- cell_E_S_scores_df %>%
+    mutate(epi_norm   = epi_mean   / cE,
+           sarco_norm = sarco_mean / cS,
+           T_cell = epi_norm + sarco_norm,
+           r_cell = ifelse(T_cell > 1e-8, sarco_norm / T_cell, NA_real_),
+           methode = m)
+  
+  res_cell[[m]] <- d
+  
+  res_ech[[m]] <- d %>%
+    group_by(orig.ident) %>%
+    summarise(med_T = median(T_cell, na.rm = TRUE),
+              med_r = median(r_cell, na.rm = TRUE), .groups = "drop") %>%
+    mutate(methode = m,
+           classe = mapply(classer, med_T, med_r, thrT, THR["r1"], THR["r2"]))
+}
+
+ech <- bind_rows(res_ech)
+
+large <- ech %>%
+  select(orig.ident, methode, classe) %>%
+  tidyr::pivot_wider(names_from = methode, values_from = classe,
+                     names_prefix = "classe_")
+
+ref <- ech %>% filter(methode == "max") %>% select(orig.ident, r_max = med_r)
+
+concordance <- large %>%
+  summarise(across(starts_with("classe_"),
+                   \(x) sum(x == classe_max, na.rm = TRUE))) %>%
+  mutate(n_echantillons = nrow(large))
+
+cat("\n===== CLASSIFICATION BY STANDARDIZATION =====\n")
+print(as.data.frame(large), row.names = FALSE)
+
+cat("\n===== CONSISTENCY WITH THE PUBLISHED VERSION (max) =====\n")
+print(as.data.frame(concordance), row.names = FALSE)
+
+cat("\n===== MEDIANS BY SAMPLE =====\n")
+print(as.data.frame(ech %>%
+                      mutate(across(where(is.numeric), \(x) round(x, 3))) %>%
+                      arrange(orig.ident, methode)), row.names = FALSE)
+
+write.csv(tab_const, file.path(results_dir, "normalization_constants.csv"), row.names = FALSE)
+write.csv(large,     file.path(results_dir, "standardization_classification.csv"), row.names = FALSE)
+write.csv(ech,       file.path(results_dir, "normalization_medians.csv"), row.names = FALSE)
+
