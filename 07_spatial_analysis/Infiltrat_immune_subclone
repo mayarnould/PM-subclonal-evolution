@@ -1,0 +1,157 @@
+library(ggplot2)
+library(Seurat)
+library(readxl)
+library(dplyr)
+library(rstatix)
+
+#Function ----------------------------------------------------------------------
+GetGenesFromSeuratObject <- function(visium, gene_list, layer = "data") {
+  genes_absent_from_seurat_object <- setdiff(gene_list, rownames(visium))
+  if (length(genes_absent_from_seurat_object) == length(gene_list)) print("no genes are found in the seurat object")
+  if (length(genes_absent_from_seurat_object) > 0)  print(glue::glue("Warning, the following genes are not present in the seurat object and therefore have been ignored for the score:
+                   {paste(genes_absent_from_seurat_object, collapse = ', ')}"))
+  GetAssayData(object = visium, 
+               layer = layer)[intersect(rownames(visium), gene_list), , drop = F]
+}
+
+AddScoreAsMeanOfGenes <- function(visium,
+                                  gene_list,
+                                  score_name,
+                                  layer = "data") {
+  print(glue::glue("\n\ncreating a score and adding it to the metadata as {score_name}"))
+  visium@meta.data[, score_name] <- apply(GetGenesFromSeuratObject(visium = visium,
+                                                                   gene_list = gene_list,
+                                                                   layer = layer),
+                                          2, mean)
+  return(visium)
+}
+
+# Load data --------------------------------------------------------------------
+visium <- readRDS(file.path("visium_T278HP.rds"))
+
+
+png(file.path("T278HP_name_cluster_spatial.png"), width = 1000, height = 1000, res = 200)
+print(SpatialDimPlot(visium, group.by = "name_cluster", cols = c("mix_Bcells_Tcells" = "#b03cff",
+                                                                 "mix_tumor" = "#e2a2a2",
+                                                                 "mix_fibroblast" = "#01af02",
+                                                                 "mix_immune_tumor" = "#8c4b16"), 
+                     pt.size.factor = 2))
+dev.off()
+
+png(file.path("T278HP_name_cluster_umap.png"), width = 1000, height = 1000, res = 200)
+print(DimPlot(visium, group.by = "name_cluster", cols = c("mix_Bcells_Tcells" = "#b03cff",
+                                                          "mix_tumor" = "#e2a2a2",
+                                                          "mix_fibroblast" = "#01af02",
+                                                          "mix_immune_tumor" = "#8c4b16")))
+dev.off()
+
+
+# Load signature E and S from single-cell data ---------------------------------
+gene_E_S <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1,2), ]  
+gene_E <- gene_E_S$`Epithelioid markers`
+gene_S <- gene_E_S$`Sarcomatoid markers`
+
+#Keep only genes present in visium expression
+genes_of_interest_E <- intersect(gene_E, rownames(visium))
+genes_of_interest_S <- intersect(gene_S, rownames(visium))
+
+visium$epi_genes <- apply(GetAssayData(object=visium, layer="data")[genes_of_interest_E,], 2, mean)
+visium$sarco_genes <- apply(GetAssayData(object=visium, layer="data")[genes_of_interest_S,], 2, mean)
+
+
+################################################################################
+# Look for immune cells -----------------------
+################################################################################
+
+genes_for_MCP <- read_xlsx(file.path("genesMCPcounter.xlsx")) %>% 
+  as.data.frame() %>% 
+  mutate(Cell.population = gsub(" ", "_", Cell.population))
+
+genes_Danaher <- read_xlsx(file.path("Danaher_2017.xlsx"),
+                           sheet = "S4. Selected markers") %>%
+  as.data.frame() %>% 
+  dplyr::rename(HUGO.symbols = Gene, Cell.population = `Cell Type`) %>% 
+  mutate(Cell.population = gsub(" ", "_", gsub("-", "_", Cell.population)))
+
+genes_MCP_meso <- read_xlsx(file.path("MCP_filtre_meso.xlsx")) %>% 
+  dplyr::rename(Cell.population = `Cell population`) %>% 
+  mutate(Cell.population = gsub(" ", "_", Cell.population))
+
+
+
+# add scores annotations for all immun cells (with becht markers) --------------
+for (pop in unique(genes_for_MCP$Cell.population)) {
+  visium <- visium %>% 
+    AddScoreAsMeanOfGenes(gene_list = filter(genes_for_MCP, Cell.population == pop)$HUGO.symbols, 
+                          score_name = paste0(pop, "_Becht"))
+  # print(FeaturePlot(MPM, feature = paste0(pop, "_Becht")))
+}
+
+# Do the same think with danaher markers ---------------------------------------
+
+for (pop in unique(genes_Danaher$Cell.population)) {
+  visium <- visium %>% 
+    AddScoreAsMeanOfGenes(gene_list = filter(genes_Danaher, Cell.population == pop)$HUGO.symbols, 
+                          score_name = paste0(pop, "_Danaher"))
+  # print(FeaturePlot(seurat_o, feature = paste0(pop, "_Becht")))
+}
+
+# Do the same think with MCP_filtre_meso markers ---------------------------------------
+
+for (pop in unique(genes_MCP_meso$Cell.population)) {
+  visium <- visium %>% 
+    AddScoreAsMeanOfGenes(gene_list = filter(genes_MCP_meso, Cell.population == pop)$Gene, 
+                          score_name = paste0(pop, "_MCP_meso"))
+  # print(FeaturePlot(seurat_o, feature = paste0(pop, "_Becht")))
+}
+
+
+color_cluster <- c("normal_s1" = "grey", 
+                   "normal_s2" = "grey",
+                   "normal_s3" = "grey", 
+                   "normal_s4" = "grey", 
+                   "other_s1" = "#fdbf6f", 
+                   "other_s2" = "#2f5597", 
+                   "other_s3" = "#ca0020")
+
+spatial_infercnv_cluster <- SpatialDimPlot(visium, label = FALSE, group.by = "cluster_infercnv", pt.size.factor = 2,
+                                           cols = color_cluster) + guides(fill = guide_legend(override.aes = list(size=5)))
+spatial_infercnv_cluster
+
+mean_immune_genes_by_spot <- visium@meta.data %>%
+  filter(!cluster_infercnv %in% c("normal_s1", "normal_s2", "normal_s3", "normal_s4")) %>%
+  rowwise() %>% 
+  mutate(score_immunitaire = mean(c_across(c(Monocytic_lineage_Becht, 
+                                             Macrophages_Danaher, Monocytic_lineage_MCP_meso)), na.rm = TRUE))
+
+color_clones <- c("other_s1" = "#fdbf6f",
+                  "other_s2" = "#2f5597",
+                  "other_s3" = "#ca0020")
+
+violin_plot_score_immune <-  mean_immune_genes_by_spot %>%
+  ggplot(aes(x = factor(cluster_infercnv, levels = c("other_s2", "other_s1", "other_s3")), y = score_immunitaire, fill = cluster_infercnv)) +
+  theme_classic() +
+  geom_violin() +
+  geom_boxplot(fill = "white", width = .2, outlier.shape = NA) +
+  ggforce::geom_sina(size = .1) +
+  scale_y_continuous(limits = c(NA, 1.5)) +
+  scale_fill_manual(values = color_clones) +
+  labs(x = "Subclones", y = "Macrophages score") +
+  theme(legend.text = element_blank(),
+        legend.position = "none",
+        axis.title.y = element_text(size = 15, color = "black"),
+        axis.text.y = element_text(size = 12, color = "black"),
+        axis.title.x = element_text(size = 15, color = "black"),
+        axis.text.x = element_blank())
+violin_plot_score_immune
+
+png(file.path("infiltrat_immune_clones_T278HP.png"), width = 600, height = 400, res = 120)
+print(violin_plot_score_immune)
+dev.off()
+
+svg(file.path("infiltrat_immune_clones_T278HP.png"), width = 450/120, height = 400/120)
+print(violin_plot_score_immune)
+dev.off()
+
