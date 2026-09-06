@@ -1,0 +1,123 @@
+library(ggplot2)
+library(Seurat)
+library(readxl)
+library(dplyr)
+
+#Function ----------------------------------------------------------------------
+GetGenesFromSeuratObject <- function(visium, gene_list, layer = "data") {
+  genes_absent_from_seurat_object <- setdiff(gene_list, rownames(visium))
+  if (length(genes_absent_from_seurat_object) == length(gene_list)) print("no genes are found in the seurat object")
+  if (length(genes_absent_from_seurat_object) > 0)  print(glue::glue("Warning, the following genes are not present in the seurat object and therefore have been ignored for the score:
+                   {paste(genes_absent_from_seurat_object, collapse = ', ')}"))
+  GetAssayData(object = visium, 
+               layer = layer)[intersect(rownames(visium), gene_list), , drop = F]
+}
+
+AddScoreAsMeanOfGenes <- function(visium,
+                                  gene_list,
+                                  score_name,
+                                  layer = "data") {
+  print(glue::glue("\n\ncreating a score and adding it to the metadata as {score_name}"))
+  visium@meta.data[, score_name] <- apply(GetGenesFromSeuratObject(visium = visium,
+                                                                   gene_list = gene_list,
+                                                                   layer = layer),
+                                       2, mean)
+  return(visium)
+}
+
+# Load data --------------------------------------------------------------------
+visium <- readRDS(file.path("visium_T278HP.rds"))
+
+# load immune/stromal markers genes
+markers <- read_xlsx("Supplementary_Table 1-4.xlsx",
+                     sheet = "Table S2.1", skip = 2)
+genes_markers <- markers %>%
+  pivot_longer(everything(),
+               names_to  = "Cell.population",
+               values_to = "HUGO.symbols") %>%
+  filter(!is.na(HUGO.symbols), HUGO.symbols != "") %>%
+  mutate(Cell.population = gsub(" ", "_", trimws(Cell.population)),
+         HUGO.symbols    = trimws(HUGO.symbols))
+
+table(genes_markers$Cell.population)
+
+## --- Add one score per population ------------------------------------------
+for (pop in unique(genes_markers$Cell.population)) {
+  visium <- visium %>%
+    AddScoreAsMeanOfGenes(
+      gene_list  = filter(genes_markers, Cell.population == pop)$HUGO.symbols,
+      score_name = pop)
+}
+
+# load sc-E and sc-S markers genes
+gene_E_S <- read_xlsx("Supplementary_Table 1-4.xlsx", sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+gene_E <- intersect(gene_E, rownames(visium))
+gene_S <- intersect(gene_S, rownames(visium))
+
+visium <- AddScoreAsMeanOfGenes(visium, gene_list = unique(gene_E),
+                                   score_name = "E_score")
+visium <- AddScoreAsMeanOfGenes(visium, gene_list = unique(gene_S),
+                                   score_name = "S_score")
+
+SpatialDimPlot(visium, group.by = "Graph.based", pt.size.factor = 2)
+
+VlnPlot(visium, features = "E_score", group.by = "Graph.based")
+VlnPlot(visium, features = "S_score", group.by = "Graph.based")
+
+png(file.path("T278HP_E_genes.png"), width = 1000, height = 1000, res = 200)
+print(SpatialFeaturePlot(visium, features = "E_score", pt.size.factor = 2))
+dev.off()
+
+png(file.path("T278HP_S_genes.png"), width = 1000, height = 1000, res = 200)
+print(SpatialFeaturePlot(visium, features = "S_score", pt.size.factor = 2))
+dev.off()
+
+png(file.path("T278HP_E_genes_violin_plot.png"), width = 1000, height = 1000, res = 200)
+print(VlnPlot(visium, features = "E_score", group.by = "Graph.based"))
+dev.off()
+
+png(file.path("T278HP_S_genes_violin_plot.png"), width = 1000, height = 1000, res = 200)
+print(VlnPlot(visium, features = "S_score", group.by = "Graph.based"))
+dev.off()
+
+################################################################################
+# Look for immune cells -----------------------
+################################################################################
+png(file.path("T278HP_Fibroblasts_violin_plot.png"), width = 1000, height = 1000, res = 200)
+print(VlnPlot(visium, features = "Fibroblasts", group.by = "Graph.based"))
+dev.off()
+
+png(file.path("T278HP_T_cells_violin_plot.png"), width = 1000, height = 1000, res = 200)
+print(VlnPlot(visium, features = "T_cells", group.by = "Graph.based"))
+dev.off()
+
+png(file.path("T278HP_B_cells_violin_plot.png"), width = 1000, height = 1000, res = 200)
+print(VlnPlot(visium, features = "B_cells", group.by = "Graph.based"))
+dev.off()
+
+png(file.path("T278HP_Endothelial_cells_violin_plot.png"), width = 1000, height = 1000, res = 200)
+print(VlnPlot(visium, features = "Endothelial_cells", group.by = "Graph.based"))
+dev.off()
+
+png(file.path("T278HP_Macrophages_violin_plot.png"), width = 1000, height = 1000, res = 200)
+print(VlnPlot(visium, features = "Macrophages", group.by = "Graph.based"))
+dev.off()
+
+SpatialFeaturePlot(visium, features = "Fibroblasts", pt.size.factor = 2)
+SpatialFeaturePlot(visium, features = "T_cells", pt.size.factor = 2)
+SpatialFeaturePlot(visium, features = "B_cells", pt.size.factor = 2)
+SpatialFeaturePlot(visium, features = "Endothelial_cells", pt.size.factor = 2)
+SpatialFeaturePlot(visium, features = "Macrophages", pt.size.factor = 2)
+
+visium@meta.data <- visium@meta.data %>% 
+  mutate(name_cluster = case_when(Graph.based == "Cluster 4" ~ "Lymphocytes",
+                                  Graph.based == "Cluster 1" ~ "Fibroblasts",
+                                  Graph.based == "Cluster 3" ~ "Mixed_normal_tumor",
+                                  Graph.based %in% c("Cluster 2", "Cluster 5", "Cluster 6") ~ "Tumor"))
+
+DimPlot(visium, group.by = "name_cluster")
+SpatialDimPlot(visium, group.by = "name_cluster", pt.size.factor = 2)
