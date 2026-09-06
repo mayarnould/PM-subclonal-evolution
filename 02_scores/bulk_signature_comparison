@@ -1,0 +1,178 @@
+library(Seurat)
+library(dplyr)
+library(readxl)
+
+## ===========================================================================
+## 1. PARAMETERS
+## ===========================================================================
+
+dataset_label <- "tumors"                  # c("cell_lines", "tumors")
+obj_path      <- "obj_snRNAseq_tumor.rds" # c("obj_scRNAseq_cell_lines.rds", "obj_snRNAseq_tumor.rds")
+table_path    <- "Supplementary_Table 1-4.xlsx"
+
+results_dir <- paste0("results_bulk_signature_", dataset_label)
+dir.create(results_dir, showWarnings = FALSE)
+
+min_cells <- 50   # minimum number of cells for a sample to be classified
+
+## Thresholds for the PC1 signature (as published)
+if (dataset_label == "cell_lines") {
+  THR_PC1 <- c(T = 0.40, r1 = 0.50, r2 = 0.82)
+} else {
+  THR_PC1 <- c(T = 0.30, r1 = 0.40, r2 = 0.70)
+}
+
+## Thresholds for the bulk signature.
+if (dataset_label == "cell_lines") {
+  THR_BULK <- c(T = 0.18, r1 = 0.45, r2 = 0.85)
+} else {
+  THR_BULK <- c(T = 0.2, r1 = 0.50, r2 = 0.82)
+}
+
+## ===========================================================================
+## 2. SIGNATURES
+## ===========================================================================
+
+read_sheet <- function(sheet, col_E, col_S) {
+  x <- read_xlsx(table_path, sheet = sheet)
+  colnames(x) <- x[2, ]; x <- x[-c(1, 2), ]
+  list(E = na.omit(x[[col_E]]), S = na.omit(x[[col_S]]))
+}
+
+sig_pc1  <- read_sheet("Table S3.2", "Epithelioid markers", "Sarcomatoid markers")
+sig_bulk <- read_sheet("Table S2.2", "Epithelioid markers", "Sarcomatoid markers")
+
+cat(sprintf("Shared genes: E %d/%d | S %d/%d\n",
+            length(intersect(sig_pc1$E, sig_bulk$E)), length(sig_pc1$E),
+            length(intersect(sig_pc1$S, sig_bulk$S)), length(sig_pc1$S)))
+
+## ===========================================================================
+## 3. SCORES
+## ===========================================================================
+
+obj  <- readRDS(obj_path)
+expr <- GetAssayData(obj, assay = "RNA", layer = "data")
+
+score_pair <- function(sig, label) {
+  gE <- intersect(sig$E, rownames(expr))
+  gS <- intersect(sig$S, rownames(expr))
+  cat(sprintf("%-10s E %d/%d | S %d/%d genes found\n",
+              label, length(gE), length(sig$E), length(gS), length(sig$S)))
+  E <- Matrix::colMeans(expr[gE, , drop = FALSE])
+  S <- Matrix::colMeans(expr[gS, , drop = FALSE])
+  E <- E / max(E); S <- S / max(S)    
+  data.frame(T = E + S, r = ifelse(E + S > 1e-8, S / (E + S), NA_real_))
+}
+
+s_pc1  <- score_pair(sig_pc1,  "PC1")
+s_bulk <- score_pair(sig_bulk, "bulk")
+
+df <- data.frame(sample = as.character(obj$orig.ident),
+                 T_pc1 = s_pc1$T,  r_pc1 = s_pc1$r,
+                 T_bulk = s_bulk$T, r_bulk = s_bulk$r,
+                 stringsAsFactors = FALSE)
+
+## ===========================================================================
+## 4. PUBLISHED LABELS AND SAMPLE MEDIANS
+## ===========================================================================
+
+published <- if (dataset_label == "cell_lines") c(
+  MPM_05 = "sc-E",  MPM_07 = "sc-E",  MPM_16 = "sc-E",  MPM_59 = "sc-E",
+  MPM_60 = "sc-E",  MPM_87 = "sc-E",  MPM_27 = "sc-I",  MPM_37 = "sc-I",
+  MPM_78 = "sc-I",  MPM_82 = "sc-I",  MPM_12 = "sc-ND", MPM_86 = "sc-ND",
+  MPM_28 = "sc-S",  MPM_70 = "sc-S") else c(
+  T094 = "sc-E",  T161NE = "sc-E",  T201_B = "sc-E",  T265HP = "sc-E",
+  `T277HP-A` = "sc-E", T325HP = "sc-E", T343_C = "sc-E", T111NE = "sc-I",
+  `T227LE-A` = "sc-ND", T043 = "sc-S", T093 = "sc-S", T255HP = "sc-S",
+  T038 = "sc-I/sc-S", T267 = "sc-I/sc-S", T278_C = "sc-I/sc-S")
+
+m <- df %>%
+  group_by(sample) %>%
+  summarise(n = n(),
+            T_med_pc1  = median(T_pc1,  na.rm = TRUE),
+            r_med_pc1  = median(r_pc1,  na.rm = TRUE),
+            T_med_bulk = median(T_bulk, na.rm = TRUE),
+            r_med_bulk = median(r_bulk, na.rm = TRUE),
+            .groups = "drop") %>%
+  filter(n >= min_cells) %>%
+  mutate(published = published[sample])
+
+## ===========================================================================
+## 5. CLASSIFICATION
+## ===========================================================================
+label_from <- function(t, r, thr) {
+  if (!is.finite(t) || t < thr["T"]) return("sc-ND")
+  if (!is.finite(r)) return("sc-ND")
+  if (r < thr["r1"]) return("sc-E")
+  if (r < thr["r2"]) return("sc-I")
+  "sc-S"
+}
+
+m <- m %>%
+  mutate(assigned_pc1  = mapply(label_from, T_med_pc1,  r_med_pc1,
+                                MoreArgs = list(thr = THR_PC1)),
+         assigned_bulk = mapply(label_from, T_med_bulk, r_med_bulk,
+                                MoreArgs = list(thr = THR_BULK)),
+         agreement = assigned_bulk == assigned_pc1)
+
+cat("\n=== CLASSIFICATION ===\n")
+print(as.data.frame(m %>% select(sample, published, assigned_pc1,
+                                 assigned_bulk, agreement)), row.names = FALSE)
+cat(sprintf("\nbulk vs PC1       : %d/%d\n", sum(m$agreement, na.rm = TRUE), nrow(m)))
+
+## ===========================================================================
+## INVARIANCE INTERVALS
+## ===========================================================================
+margin <- function(v, thr, nom) {
+  v <- sort(v[is.finite(v)])
+  low  <- if (any(v < thr)) max(v[v < thr]) else NA
+  high <- if (any(v > thr)) min(v[v > thr]) else NA
+  data.frame(threshold = nom, value = unname(thr),
+             low = round(low, 3), high = round(high, 3),
+             margin_low  = round(100 * (thr - low)  / thr, 1),
+             margin_high = round(100 * (high - thr) / thr, 1))
+}
+
+## r thresholds are evaluated among the samples that pass the T threshold
+r_ok <- m$r_med_bulk[m$T_med_bulk >= THR_BULK["T"]]
+
+invariance <- rbind(
+  margin(m$T_med_bulk, THR_BULK["T"],  "T"),
+  margin(r_ok,         THR_BULK["r1"], "r1"),
+  margin(r_ok,         THR_BULK["r2"], "r2"))
+
+cat("\n=== INVARIANCE INTERVALS (bulk signature) ===\n")
+print(invariance, row.names = FALSE)
+
+write.csv(invariance, file.path(results_dir,
+                                paste0("invariance_bulk_", dataset_label, ".csv")), row.names = FALSE)
+
+## ===========================================================================
+## 6. CORRELATIONS
+## ===========================================================================
+test_cor <- function(x, y, coord, method) {
+  ct <- cor.test(x, y, method = method, exact = FALSE)
+  data.frame(dataset = dataset_label, coordinate = coord, method = method,
+             n = length(x), estimate = round(unname(ct$estimate), 3),
+             p_value = signif(ct$p.value, 3))
+}
+
+correlations <- rbind(
+  test_cor(m$r_med_pc1, m$r_med_bulk, "r", "spearman"),
+  test_cor(m$r_med_pc1, m$r_med_bulk, "r", "pearson"),
+  test_cor(m$T_med_pc1, m$T_med_bulk, "T", "spearman"),
+  test_cor(m$T_med_pc1, m$T_med_bulk, "T", "pearson"))
+
+cat("\n=== CORRELATIONS BETWEEN THE TWO SIGNATURES ===\n")
+print(correlations, row.names = FALSE)
+
+## ===========================================================================
+## 7. OUTPUT
+## ===========================================================================
+
+write.csv(m, file.path(results_dir,
+          paste0("comparison_signatures_", dataset_label, ".csv")), row.names = FALSE)
+write.csv(correlations, file.path(results_dir,
+          paste0("correlations_", dataset_label, ".csv")), row.names = FALSE)
+
+ 
