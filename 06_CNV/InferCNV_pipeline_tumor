@@ -1,0 +1,82 @@
+library(dplyr)
+library(infercnv)
+
+# Function ,--------------------------------------------------------------------
+LoadRdata <- function(file_name, quiet = F) {
+  if (file.exists(file_name)) return(eval(parse(text = load(file_name))))
+  cat(paste("error - function geco.load : file", file_name, "not found"))
+  NULL
+}
+
+factoall <- function (d, ncmax = 10) {
+  n <- ncol(d)
+  for (i in 1:n) {
+    if (is.factor(d[, i])) {
+      d[, i] <- as.character(d[, i])
+      na <- which(is.na(d[, i]))
+      num <- suppressWarnings(as.numeric(d[, i]))
+      nanum <- which(is.na(num))
+      if (length(nanum) == length(na)) {
+        d[, i] <- num
+      }
+    }
+  }
+  d
+}
+
+# parameters -------------------------------------------------------------------
+name_tumors <- c("T267", "T278_C", "T343_C", "T043", "T093", "T094", "T201_B", "T038", 
+                 "T161NE", "T111NE", "T277HP-A", "T325HP", "T227LE-A", "T255HP", "T265HP")[1]
+
+# Load data --------------------------------------------------------------------
+counts_matrix <- LoadRdata(glue::glue("counts_matrix_{name_tumors}.Rdata"))
+
+annotation <- read.table(glue::glue("cell_annotations_{name_tumors}_with_all_normal.txt"))
+annotation <- annotation %>% tibble::column_to_rownames(., var = "V1") %>% slice (-1)
+
+genomic_position_file <- read.delim("genomic_position_file_ensembl.txt", header = F) %>% factoall() %>% magrittr::set_rownames(.$V1) %>% select(-V1) %>% mutate(V2 = ifelse(V2 %in% c(1:22, "X", "Y", "MT"), paste0("chr",V2), V2)) %>% filter(V2 %in% paste0("chr", c(1:22, "X", "Y")))
+genomic_position_file <- genomic_position_file[c(which(genomic_position_file$V2%in%paste0("chr", 1:7)), which(genomic_position_file$V2%in%paste0("chr", 8:9)), which(genomic_position_file$V2=="chr10"), which(genomic_position_file$V2=="chr11"),
+                                                 which(genomic_position_file$V2%in%paste0("chr", 12:18)), which(genomic_position_file$V2=="chr19"), which(genomic_position_file$V2=="chr20"), which(genomic_position_file$V2=="chr21"),
+                                                 which(genomic_position_file$V2=="chr22"), which(genomic_position_file$V2=="chrX"), which(genomic_position_file$V2=="chrY")),]
+
+features_snRNAseq <- factoall(read.table("features.tsv.gz", sep = "\t", header = F))
+
+gene_to_remove <- c("TBCE", "LINC01238", "CYB561D2", "MATR3", "LINC01505", "HSPA14", "GOLGA8M", "GGT1", "ARMCX5-GPRASP2", "TMSB15B")
+gene_to_remove_1 <- c("TBCE.1", "LINC01238.1", "CYB561D2.1", "MATR3.1", "LINC01505.1", "HSPA14.1", "GOLGA8M.1", "GGT1.1", "ARMCX5-GPRASP2.1", "TMSB15B.1")
+
+features_snRNAseq <- features_snRNAseq %>%
+  filter(!V2 %in% gene_to_remove)
+
+features_snRNAseq <- features_snRNAseq %>%
+  magrittr::set_rownames(features_snRNAseq$V2)
+
+counts_matrix <- as.matrix(counts_matrix)
+counts_matrix <- counts_matrix %>%
+  as.data.frame() %>% 
+  filter(!rownames(.) %in% gene_to_remove) %>%
+  filter(!rownames(.) %in% gene_to_remove_1)
+
+if(identical(rownames(counts_matrix), features_snRNAseq$V2)) {
+  rownames(counts_matrix) <- features_snRNAseq$V1 # conversion gene name --> gene id to have the same IDs for both files
+} else {
+  print("warning : Some genes are missing in one of the two data")
+}
+
+genes_to_keep <- intersect(rownames(counts_matrix), rownames(genomic_position_file))
+
+counts_matrix <- counts_matrix %>% 
+  filter(rownames(.) %in% genes_to_keep)
+genomic_position_file <- genomic_position_file %>% 
+  filter(rownames(.) %in% genes_to_keep)
+
+infercnv_obj = CreateInfercnvObject(raw_counts_matrix=counts_matrix,
+                                      annotations_file=annotation,
+                                      delim="\t",
+                                      gene_order_file=genomic_position_file,
+                                      ref_group_names= c("normal"),
+                                      chr_exclude = c("chrMT", "chrM"))
+
+infercnv_obj = infercnv::run(infercnv_obj, cutoff=0.1, out_dir="InferCNV", cluster_by_groups=T, denoise=F, HMM=F, analysis_mode="subclusters", k_nn=30, leiden_resolution = 1)
+
+infercnv_obj_subcluster <- infercnv_obj@tumor_subclusters$subclusters
+save(infercnv_obj_subcluster, file="infercnv_obj_subcluster.Rdata")
