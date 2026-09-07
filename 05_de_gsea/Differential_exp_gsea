@@ -1,0 +1,132 @@
+library(Seurat)
+library(dplyr)
+library(fgsea)
+library(msigdbr)
+library(readxl)
+library(ggplot2)
+library(ggrepel)
+
+# Function ---------------------------------------------------------------------
+LoadRData = function(file.name,
+                     print.dim = T,
+                     print.real.name = T) {
+  file.real.name = load(file.name, verbose = print.real.name)
+  if (print.dim) cat("dimensions: ", dim(get(file.real.name)))
+  return(get(file.real.name))
+}
+
+# Load data --------------------------------------------------------------------
+MPM_merge <- readRDS(file.path("obj_scRNAseq_cell_lines.rds"))
+
+# # sc-I vs sc-S -----------------
+Idents(MPM) <- "orig.ident"
+
+sc_I_vs_S <- FindMarkers(MPM_merge, ident.1 = c("MPM27", "MPM82", "MPM78", "MPM37"), ident.2 = c("MPM28", "MPM70"))
+
+res <- sc_I_vs_S %>%
+  arrange(-avg_log2FC) %>%
+  mutate(p_val = round(p_val, digits = 2),
+         avg_log2FC = round(avg_log2FC, digits = 2),
+         pct.1 = round(pct.1, digits = 2),
+         pct.2 = round(pct.2, digits = 2),
+         p_val_adj = round(p_val_adj, digits = 2))
+
+
+# sc-I vs sc-E -----------------
+Idents(MPM_merge) <- "orig.ident"
+
+sc_I_vs_E <- FindMarkers(MPM_merge, ident.1 = c("MPM27", "MPM82", "MPM78", "MPM37"), ident.2 = c("MPM60", "MPM16", "MPM87", "MPM59", "MPM05", "MPM07"))
+head(sc_I_vs_E, n = 20)
+
+res <- sc_I_vs_E %>% 
+  arrange(-avg_log2FC) %>% 
+  mutate(p_val = round(p_val, digits = 2),
+         avg_log2FC = round(avg_log2FC, digits = 2),
+         pct.1 = round(pct.1, digits = 2),
+         pct.2 = round(pct.2, digits = 2),
+         p_val_adj = round(p_val_adj, digits = 2))
+
+# sc-ND vs all -----------------
+Idents(MPM_merge) <- "orig.ident"
+
+sc_I_vs_E <- FindMarkers(MPM_merge, ident.1 = c("MPM86", "MPM12"), 
+                         ident.2 = c("MPM27", "MPM82", "MPM78", "MPM37", "MPM60", "MPM16", "MPM87", "MPM59", "MPM05", "MPM07", "MPM28", "MPM70"))
+head(sc_I_vs_E, n = 20)
+
+res <- sc_I_vs_E %>% 
+  arrange(-avg_log2FC) %>% 
+  mutate(p_val = round(p_val, digits = 2),
+         avg_log2FC = round(avg_log2FC, digits = 2),
+         pct.1 = round(pct.1, digits = 2),
+         pct.2 = round(pct.2, digits = 2),
+         p_val_adj = round(p_val_adj, digits = 2))
+
+################################################################################
+# GSEA
+
+# Load data
+m_sapiens = msigdbr(species = "Homo sapiens")
+
+m_list_hum_hallmark <- m_sapiens %>% 
+  filter(gs_collection =="H") %>%
+  split(x = .$gene_symbol, f = .$gs_name)
+
+m_list_hum_REACTOME <- m_sapiens %>% 
+  filter(gs_subcollection =="CP:REACTOME") %>%
+  split(x = .$gene_symbol, f = .$gs_name)
+
+m_list_hum_KEGG <- m_sapiens %>% 
+  filter(gs_subcollection =="CP:KEGG_LEGACY") %>%
+  split(x = .$gene_symbol, f = .$gs_name)
+
+# Load the data that you want to test with information for pvalue and R or log2fc
+ranks <- res$avg_log2FC
+names(ranks)<- rownames(res)
+
+ranks <- sort(ranks, decreasing = TRUE)
+
+# RUN GSEA
+set.seed(42)
+
+collection_interest <- list(m_list_hum_hallmark, m_list_hum_REACTOME, m_list_hum_KEGG)[[1]]
+fgseaRes <- fgsea(pathways = collection_interest,
+                  stats = ranks,
+                  eps = 0.0,
+                  minSize=15,
+                  maxSize=500
+)
+
+# LOOK at the RESULTS
+head(fgseaRes[order(pval,decreasing = F), ])
+fgseaRes <- fgseaRes[order(pval,decreasing = F)]
+
+
+RES<- as.data.frame(fgseaRes)
+RES$leadingEdge <- vapply(RES$leadingEdge, paste, collapse = ", ", character(1L))
+
+
+write.table(RES, file=file.path("GSEA_output.txt"), quote=FALSE, row.names=TRUE, sep="\t")
+
+# Plot
+plotEnrichment(m_list_hum_hallmark[["HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION"]],
+               ranks) + labs(title = "Hallmark Epithelial mesenchymal transition",
+                             x = "Enrichment score",
+                             y = "Rank") + theme(axis.text.x = element_text(size = 12, color = "black"),
+                                                 axis.title.x = element_text(size = 15), 
+                                                 axis.text.y = element_text(size = 15, color = "black"),
+                                                 axis.title.y = element_text(size = 15),
+                                                 legend.text = element_blank())
+
+
+
+
+png(file.path("hallmark_EMT_int_vs_E.png"), width = 1200, height = 500, res = 120)
+print(plotEnrichment(m_list_hum_hallmark[["HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION"]],
+                     ranks) + labs(title = "Hallmark Epithelial mesenchymal transition",
+                                   x = "Enrichment score",
+                                   y = "Rank") + theme(axis.text.x = element_text(size = 12, color = "black"),
+                                                       axis.title.x = element_text(size = 15), 
+                                                       axis.text.y = element_text(size = 15, color = "black"),
+                                                       axis.title.y = element_text(size = 15),
+                                                       legend.text = element_blank()))
+dev.off()
