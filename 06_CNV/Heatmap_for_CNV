@@ -27,7 +27,7 @@ distCosine = function (m) {
 }
 
 # Load the dataframe -----------------------------------------------------------
-df <- read_xlsx(file.path("cnv_for_figures_14s.xlsx")) %>% 
+df <- read_xlsx(file.path("cnv_by_sample_tumor.xlsx")) %>% 
   tibble::column_to_rownames(., var = "...1")
 
 df <- df %>%
