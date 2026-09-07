@@ -1,0 +1,30 @@
+library(ggplot2)
+library(dplyr)
+library(Seurat)
+
+#Function ----------------------------------------------------------------------
+LoadRdata <- function(file_name, quiet = F) {
+  if (file.exists(file_name)) return(eval(parse(text = load(file_name))))
+  cat(paste("error - function geco.load : file", file_name, "not found"))
+  NULL
+}
+
+# Load seurat object ---------------------------------
+visium <- readRDS(file.path("visium_T278HP.rds"))
+# save the count matrix
+spatial_matrix <-  GetAssayData(visium, assay = "Spatial")
+
+save(spatial_matrix, file=file.path("spatial_matrix_T278HP.Rdata"))
+
+# prepare annotation files
+unique(visium@meta.data$name_cluster)
+
+normal_cluster_for_CNV <- visium@meta.data %>%
+  filter(name_cluster %in% c("mix_Bcells_Tcells", "mix_fibroblast")) %>% 
+  rownames(.)
+
+annotation <- data.frame(cell = rownames(visium@meta.data), type = NA) %>% 
+  mutate(type = case_when(cell %in% normal_cluster_for_CNV ~ "normal",
+                          !cell %in% normal_cluster_for_CNV~ "other"))
+
+write.table(annotation, file=file.path("annotation_T278HP_infercnv.txt"), sep = "\t", row.names = F)
