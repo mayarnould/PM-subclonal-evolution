@@ -1,0 +1,143 @@
+library(readxl)
+library(survival)
+library(survminer)
+library(ggplot2)
+library(dplyr)
+
+# load metadata ----------------------------------------------------------------
+metadata <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_1_annotations_of_the_cohort_of_pleural_mesothelioma_frozen_tumor_samples)) %>% 
+  magrittr::set_colnames(.[1,]) %>% 
+  janitor::clean_names() %>% 
+  filter(!tumors_id == "Tumors ID") %>% 
+  filter(!survival_status == "NA") %>% 
+  filter(chemotherapy_prior_tumor_sample_collection == "none") %>% 
+  distinct(patient_id, .keep_all = TRUE) %>% 
+  mutate(sc_types = case_when(phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Epithelioid" ~ "sc-E",
+                              phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Intermediate" ~ "sc-I",
+                              phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Sarcomatoid" ~ "sc-S",
+                              phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Non-differentiated" ~ "sc-ND"))
+
+metadata$sc_types  <- factor(metadata$sc_types, levels = c("sc-E", "sc-I", "sc-S", "sc-ND"))
+
+metadata <- metadata %>% 
+  mutate(survival_status = ifelse(survival_status == "dead", 1, 0))
+
+metadata$overall_survival_months <- as.numeric(metadata$overall_survival_months)
+
+metadata <- metadata %>% 
+  mutate(etat_60 = ifelse(overall_survival_months > 60, 0, survival_status),
+         Survie_60 = ifelse(overall_survival_months > 60, 60, overall_survival_months))
+
+surv_object <- Surv(time = metadata$Survie_60, event = metadata$etat_60)
+
+fit <- survfit(surv_object ~ sc_types, data = metadata)
+
+summary(fit)$table
+
+p <- ggsurvplot(fit,
+           data = metadata,
+           pval = TRUE,          
+           conf.int = FALSE,      
+           risk.table = TRUE,    
+           legend.title = "",
+           legend.labs = levels(metadata$sc_types),
+           palette = c("#3e7d9c", "#d678a3", "#802525", "#6a3d98"),
+           xlab = "Time (months)",
+           ylab = "Overall survival frequency",
+           risk.table.title = "Patients at risk (n)",
+           risk.table.y.text = TRUE,
+           risk.table.y.text.col = TRUE)
+
+
+p$plot <- p$plot +
+  theme(legend.text = element_blank(),
+        legend.title = element_blank(),
+        axis.title.x = element_text("Time (months)"),
+        axis.title.y = element_text("Overall survival frequency"))
+    
+
+png(file.path("survival_curve_E_I_S_ND.png"), width = 650, height = 760, res = 120)
+print(p)
+dev.off()
+
+svg(file.path("survival_curve_E_I_S_ND.svg"), width = 650/120, height = 850/120)
+print(p)
+dev.off()
+
+# Statistic test (log-rank)
+survdiff(surv_object ~ types_clustering, data = metadata)
+
+################################################################################
+# Only MME histology
+metadata <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_1_annotations_of_the_cohort_of_pleural_mesothelioma_frozen_tumor_samples)) %>% 
+  magrittr::set_colnames(.[1,]) %>% 
+  janitor::clean_names() %>% 
+  filter(!tumors_id == "Tumors ID") %>% 
+  filter(histology == "E") %>% 
+  filter(!survival_status == "NA") %>% 
+  filter(chemotherapy_prior_tumor_sample_collection == "none") %>% 
+  distinct(patient_id, .keep_all = TRUE) %>% 
+  mutate(sc_types = case_when(phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Epithelioid" ~ "sc-E",
+                              phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Intermediate" ~ "sc-I",
+                              phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Sarcomatoid" ~ "sc-S",
+                              phenotypic_single_cell_subtypes_based_on_bulk_rna_seq == "Non-differentiated" ~ "sc-ND"))
+
+metadata <- metadata %>% 
+  filter(sc_types %in% c("sc-E", "sc-I"))
+
+metadata$sc_types <- factor(metadata$sc_types, 
+                                    levels = c("sc-E", "sc-I"))
+
+metadata <- metadata %>% 
+  mutate(survival_status = ifelse(survival_status == "dead", 1, 0))
+
+metadata$overall_survival_months <- as.numeric(metadata$overall_survival_months)
+
+metadata <- metadata %>% 
+  mutate(etat_60 = ifelse(overall_survival_months > 60, 0, survival_status),
+         Survie_60 = ifelse(overall_survival_months > 60, 60, overall_survival_months))
+
+surv_object <- Surv(time = metadata$Survie_60, event = metadata$etat_60)
+
+fit <- survfit(surv_object ~ sc_types, data = metadata)
+
+p <- ggsurvplot(fit,
+                data = metadata,
+                pval = TRUE,          
+                conf.int = FALSE,      
+                risk.table = TRUE,    
+                legend.title = "",
+                legend.labs = levels(metadata$sc_types),
+                palette = c("#3e7d9c", "#d678a3"),
+                xlab = "Time (months)",
+                ylab = "Overall survival frequency",
+                risk.table.title = "Patients at risk (n)",
+                risk.table.y.text = TRUE,
+                risk.table.y.text.col = TRUE)
+
+p$plot <- p$plot +
+  theme(legend.text = element_blank(),
+        legend.title = element_blank(),
+        axis.title.x = element_text("Time (months)"),
+        axis.title.y = element_text("Overall survival frequency"))
+
+summary(fit)$table
+
+png(file.path("survival_curve_MME_histo.png"), width = 650, height = 760, res = 120)
+print(p)
+dev.off()
+
+
+svg(file.path("survival_curve_MME_histo.svg"), width = 650/120, height = 800/120)
+print(p)
+dev.off()
+
+
+
+
+
+
