@@ -3,7 +3,7 @@ library(readxl)
 library(dplyr)
 
 # Load the dataframe
-df <- read_xlsx(file.path("resume_CNV_from_single-cell_analysis_nbr_14s.xlsx")) %>% 
+df <- read_xlsx(file.path("Barplot_cnv_tumor_sample.xlsx")) %>% 
   mutate(number = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(number), number)) %>% 
   mutate(stats = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(stats), stats))
 
