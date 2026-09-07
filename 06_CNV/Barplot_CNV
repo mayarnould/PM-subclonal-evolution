@@ -17,7 +17,7 @@ labels <- ifelse(seq_along(chromosome_order) %% 2 == 0,
                  chromosome_order)
 
 
-png(file.path(image_dir, "bar_plot_CNV_all_samples_14s.png"), width = 1450, height = 500, res = 120)
+png(file.path(image_dir, "bar_plot_CNV_all_samples_15s.png"), width = 1450, height = 500, res = 120)
 print(df %>%
         ggplot(aes(x = chromosome, y = number, fill = factor(alteration_types, levels = names(alter_colors)))) +
         geom_bar(stat = "identity", color = "black", position = "stack") +
@@ -34,7 +34,7 @@ print(df %>%
               legend.title = element_text(size = 15)))
 dev.off()
 
-png(file.path(image_dir, "bar_plot_CNV_all_samples_percentage_14s.png"), width = 1450, height = 500, res = 120)
+png(file.path(image_dir, "bar_plot_CNV_all_samples_percentage_15s.png"), width = 1450, height = 500, res = 120)
 print(df %>%
         ggplot(aes(x = chromosome, y = stats, fill = factor(alteration_types, levels = names(alter_colors)))) +
         geom_bar(stat = "identity", color = "black", position = "stack") +
