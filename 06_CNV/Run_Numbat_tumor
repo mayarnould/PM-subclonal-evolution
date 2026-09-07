@@ -1,0 +1,24 @@
+library(numbat)
+require(Matrix)
+
+# parameters -------------------------------------------------------------------
+name_tumors <- c("T267", "T278_C", "T343_C", "T043", "T093", "T094", "T201_B", "T038", 
+                 "T161NE", "T111NE", "T277HP-A", "T325HP", "T227LE-A", "T255HP", "T265HP")[1]
+
+# Function ---------------------------------------------------------------------
+LoadRdata <- function(file_name, quiet = F) {
+  if (file.exists(file_name)) return(eval(parse(text = load(file_name))))
+  cat(paste("error - function geco.load : file", file_name, "not found"))
+  NULL
+}
+
+counts_matrix <- LoadRdata(file.path(glue::glue("counts_matrix_{name_tumors}_count_RNA.Rdata")))
+annot <- read.table(file = file.path(glue::glue("annot_for_numbat_{name_tumors}.txt")), sep = "\t", header = TRUE)
+
+ref_internal = aggregate_counts(counts_matrix, annot)
+
+# Output of pileup and phase part ----------------------------------------------
+df_allele <- read.delim(file.path(glue::glue("{name_tumors}_allele_counts.tsv.gz")))
+
+# Run numbat
+out = run_numbat(counts_matrix, ref_internal, df_allele, genome = "hg38", t = 1e-5, ncores = 4, plot = TRUE, out_dir = output_dir, max_iter = 3)
