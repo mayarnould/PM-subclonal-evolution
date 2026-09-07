@@ -1,0 +1,44 @@
+library(Seurat)
+library(patchwork)
+library(ggplot2)
+library(readxl)
+library(dplyr)
+
+# Parameter --------------------------------------------------------------------
+name_tumors <- c("T267", "T278_C", "T343_C", "T043", "T093", "T094", "T201_B", "T038", 
+                 "T161NE", "T111NE", "T277HP-A", "T325HP", "T227LE-A", "T255HP", "T265HP")[1]
+
+# Load seurat object ---------------------------------
+MPM <- readRDS(file.path("obj_snRNAseq_tumor.rds"))
+MPM <- MPM %>% 
+  subset(orig.ident %in% name_tumors)
+
+# Load the count matrix --------------------------------------------------------
+if (!counts_matrix_already_saved) {
+  print("Recover the counts matrix of the seurat object")
+  counts_matrix <-  GetAssayData(MPM, assay = "RNA", slot="counts")
+  save(counts_matrix, file=file.path(glue::glue("counts_matrix_{name_tumors}.Rdata")))
+} else {
+  print("Recover the counts_matrix when you have already save it")
+  counts_matrix <- LoadRdata(file.path(glue::glue("counts_matrix_{name_tumors}_count_RNA.Rdata")))
+}
+
+annot <- MPM@meta.data %>% 
+  select(final_cluster_id)
+
+annot <- annot %>% 
+  tibble::rownames_to_column(., var = "cell")
+
+unique(annot$final_cluster_id)
+
+annot <- annot %>% 
+  filter(!final_cluster_id %in% c("Other", "Neutrophiles", "Tumor cells")) %>% 
+  mutate(group = case_when(final_cluster_id == "Endothelial cells" ~ "Endothelial",
+                           final_cluster_id == "Macrophages" ~ "Macrophages",
+                           final_cluster_id == "B cells" ~ "Bcells",
+                           final_cluster_id == "T cells" ~ "Tcells",
+                           final_cluster_id == "Fibroblast" ~ "Fibroblast")) %>% 
+  select(-final_cluster_id)
+
+write.table(annot, file = file.path(glue::glue("annot_for_numbat_{name_tumors}.txt")), sep = "\t")
+
