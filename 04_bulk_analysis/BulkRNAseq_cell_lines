@@ -1,0 +1,138 @@
+library(ComplexHeatmap)
+library(readxl)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+
+#------------------------------------- Function --------------------------------
+LoadRData = function(file.name,
+                     print.dim = T,
+                     print.real.name = T) {
+  file.real.name = load(file.name, verbose = print.real.name)
+  if (print.dim) cat("dimensions: ", dim(get(file.real.name)))
+  return(get(file.real.name))
+}
+
+# Load data vst
+vst <- LoadRData(file.path("vst_58s.Rdata")) %>% 
+  as.data.frame() %>% 
+  filter(!grepl("MT-", row.names(.)))
+
+# Look for clustering only for E and S genes of single-cell data
+gene_E_S <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1,2), ]  
+gene_E <- gene_E_S$`Epithelioid markers`
+gene_S <- gene_E_S$`Sarcomatoid markers`
+
+genes_E_S <- c(gene_E, gene_S)
+
+vst_filtered <- count %>% 
+  as.data.frame() %>% 
+  filter(rownames(.) %in% genes_E_S)
+
+# Load metadata files
+metadata <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S1.2") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_2_annotations_of_the_cohort_of_pleural_mesothelioma_patient_derived_primary_cell_lines)) %>% 
+  magrittr::set_colnames(.[1,]) %>% 
+  janitor::clean_names() %>% 
+  filter(!cell_lines_id == "Cell lines ID")
+
+metadata$s_score <- as.numeric(metadata$s_score)
+
+metadata <- metadata %>% 
+  mutate(e_score = 1 - s_score)
+
+vst_filtered <- vst_filtered %>% 
+  select(metadata$cell_lines_id)
+
+################################################################################
+
+# Add annotation -------------
+
+### ANNOTATION ####
+if (!all(metadata$cell_lines_id == colnames(vst_filtered))) {
+  print("WARNING: order is different so annotations won't match")
+} else {
+  print("order is the same in annotation and matrix -> keep going")
+}
+
+if (!all(metadata$cell_lines_id == colnames(vst_filtered))) {
+  metadata <- metadata %>% 
+    .[match(colnames(vst_filtered), .$cell_lines_id),]
+}
+
+if (!all(metadata$cell_lines_id == colnames(vst_filtered))) {
+  print("WARNING: order is different so annotations won't match")
+} else {
+  print("order is the same in annotation and matrix -> keep going")
+}
+
+gender_cols <- c("M" = "#925AC7", "F" = "#1C9956")
+histo_cols <- c("E" = "#3194CA", "S" = "#B83243", "B" = "#D68340", "NA" = "grey90")
+mut_cols <- c("M" = "#F09F57", "WT" = "white")
+mut_types <- c("Epithelioid" = "#3e7d9c", "Sarcomatoid" = "#802525", "Non-differentiated" = "#6a3d98", "Intermediate" = "#d678a3", 
+               "NA" = "grey90")
+
+# Annotations
+annotation_cell_lines <- HeatmapAnnotation(sc_types = anno_simple(metadata$phenotypic_single_cell_subtypes_based_on_sc_rna_seq,
+                                                                  width = unit(0.7, "cm"),
+                                                                  height = unit(0.5, "cm"),
+                                                                  mut_types),
+                                           empty_2 = anno_empty(border = FALSE, height = unit(.02, "cm")),
+                                           histology = anno_simple(metadata$histology,
+                                                                   width = unit(0.7, "cm"),
+                                                                   height = unit(0.5, "cm"),
+                                                                   col = histo_cols),
+                                           empty_3 = anno_empty(border = FALSE, height = unit(.02, "cm")),
+                                           E_S_score = anno_barplot(select(metadata, e_score, s_score), 
+                                                                    height = unit(0.8, "cm"),
+                                                                    bar_width = .95,
+                                                                    gp = gpar(fill = c("#b2d1e0", "#cb4d4d"))),
+                                           empty_4 = anno_empty(border = FALSE, height = unit(.02, "cm")),
+                                           BAP1 = anno_simple(metadata$bap1,
+                                                              width = unit(0.7, "cm"),
+                                                              height = unit(0.5, "cm"),
+                                                              mut_cols),
+                                           TERT = anno_simple(metadata$ter_tprom,
+                                                              width = unit(0.7, "cm"),
+                                                              height = unit(0.5, "cm"),
+                                                              mut_cols),
+                                           show_legend = F)
+
+# Centrer gene
+centering = TRUE
+
+if (centering) {
+  vst_filtered = vst_filtered - apply(vst_filtered, 1, . %>% median(., na.rm = T))
+}
+
+
+col_clust_cos <- hclust(dist(t(vst_filtered), method = "euclidian"), method = "ward.D2") 
+col_dend <- as.dendrogram(col_clust_cos)
+
+subnode_1 <- col_dend[[2]]
+col_dend[[2]] <- rev(subnode_1)
+
+clustering_cos_row_nor <- Heatmap(vst_filtered, 
+                                  name = NULL,
+                                  heatmap_legend_param = list(title = NULL),
+                                  cluster_columns = col_dend,
+                                  top_annotation = annotation_cell_lines, 
+                                  show_row_names = F,
+                                  show_column_names = F,
+                                  column_split = 4,
+                                  row_km = 2,
+                                  width = unit(18, "cm"),
+                                  height = unit(11, "cm"))
+clustering_cos_row_nor
+
+png(file.path("clustering_k4_cell_lines.png"),
+    width = 1000, height = 1000, res = 120)
+print(clustering_cos_row_nor)
+dev.off()
+
+svg(file.path("clustering_k4_cell_lines.svg"), width = 1100/120, height = 800/120)
+print(clustering_cos_row_nor)
+dev.off()
