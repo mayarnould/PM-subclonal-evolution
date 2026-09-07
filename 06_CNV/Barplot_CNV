@@ -1,0 +1,122 @@
+library(ggplot2)
+library(readxl)
+library(dplyr)
+
+# Load the dataframe
+df <- read_xlsx(file.path("resume_CNV_from_single-cell_analysis_nbr_14s.xlsx")) %>% 
+  mutate(number = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(number), number)) %>% 
+  mutate(stats = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(stats), stats))
+
+
+# Parameters -------------------------------------------------------------------
+chromosome_order <- unique(df$chromosome)
+alter_colors <- c("subclonal_loss" = "#60C5D6", "clonal_loss" = "#2171b5", "subclonal_gain" = "#fc8d59",  "clonal_gain" = "#d7301f")
+
+labels <- ifelse(seq_along(chromosome_order) %% 2 == 0,
+                 paste0("\n", chromosome_order),
+                 chromosome_order)
+
+
+png(file.path(image_dir, "bar_plot_CNV_all_samples_14s.png"), width = 1450, height = 500, res = 120)
+print(df %>%
+        ggplot(aes(x = chromosome, y = number, fill = factor(alteration_types, levels = names(alter_colors)))) +
+        geom_bar(stat = "identity", color = "black", position = "stack") +
+        scale_x_discrete(limits = chromosome_order, labels = labels) +
+        scale_fill_manual(limits = names(alter_colors), , values = alter_colors) +
+        scale_y_continuous(labels = abs, limits = c(-13, 5)) +
+        theme_minimal() +
+        labs(x = "Chromosome", y = "Number of samples", fill = "Alterations types") +
+        theme(axis.text.x = element_text(size = 15, color = "black"),
+              axis.title.x = element_text(size = 15), 
+              axis.text.y = element_text(size = 15, color = "black"),
+              axis.title.y = element_text(size = 15),
+              legend.text = element_text(size = 15, color = "black"),
+              legend.title = element_text(size = 15)))
+dev.off()
+
+png(file.path(image_dir, "bar_plot_CNV_all_samples_percentage_14s.png"), width = 1450, height = 500, res = 120)
+print(df %>%
+        ggplot(aes(x = chromosome, y = stats, fill = factor(alteration_types, levels = names(alter_colors)))) +
+        geom_bar(stat = "identity", color = "black", position = "stack") +
+        scale_x_discrete(limits = chromosome_order, labels = labels) +
+        scale_fill_manual(limits = names(alter_colors), , values = alter_colors) +
+        scale_y_continuous(expand = c(0, 0), labels = scales::percent) +
+        theme_minimal() +
+        labs(x = "Chromosome", y = "Percentage of samples", fill = "Alterations types") +
+        theme(axis.text.x = element_text(size = 15, color = "black"),
+              axis.title.x = element_text(size = 15), 
+              axis.text.y = element_text(size = 15, color = "black"),
+              axis.title.y = element_text(size = 15),
+              legend.text = element_text(size = 15, color = "black"),
+              legend.title = element_text(size = 15)))
+dev.off()
+
+################################################################################
+# 2nd plot
+################################################################################
+# Only E sample and only S sample
+
+# Only S
+# Load the dataframe
+df <- read_xlsx(file.path("resume_CNV_from_single-cell_analysis_nbr_only_S.xlsx")) %>% 
+  mutate(number = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(number), number)) %>% 
+  mutate(stats = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(stats), stats))
+  
+# Parameters -------------------------------------------------------------------
+chromosome_order <- unique(df$chromosome)
+alter_colors <- c("subclonal_loss" = "#60C5D6", "clonal_loss" = "#2171b5", "subclonal_gain" = "#fc8d59",  "clonal_gain" = "#d7301f")
+
+labels <- ifelse(seq_along(chromosome_order) %% 2 == 0,
+                 paste0("\n", chromosome_order),  
+                 chromosome_order)
+
+png(file.path(image_dir, "bar_plot_CNV_all_samples_percentage_only_S.png"), width = 1450, height = 500, res = 120)
+print(df %>%
+        ggplot(aes(x = chromosome, y = stats, fill = factor(alteration_types, levels = names(alter_colors)))) +
+        geom_bar(stat = "identity", color = "black", position = "stack") +
+        scale_x_discrete(limits = chromosome_order, labels = labels) +
+        scale_fill_manual(limits = names(alter_colors), , values = alter_colors) +
+        scale_y_continuous(expand = c(-.3, 0.6), labels = scales::percent) +
+        # scale_y_continuous(labels = abs, limits = c(-13, 5)) +
+        theme_minimal() +
+        labs(x = "Chromosome", y = "Percentage of samples", fill = "Alterations types") +
+        theme(axis.text.x = element_text(size = 15, color = "black"),
+              axis.title.x = element_text(size = 15), 
+              axis.text.y = element_text(size = 15, color = "black"),
+              axis.title.y = element_text(size = 15),
+              legend.text = element_text(size = 15, color = "black"),
+              legend.title = element_text(size = 15)))
+dev.off()
+
+
+# Only E
+# Load the dataframe
+df <- read_xlsx(file.path(files_dir, "resume_CNV_from_single-cell_analysis_nbr_only_E.xlsx")) %>% 
+  mutate(number = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(number), number)) %>% 
+  mutate(stats = ifelse(alteration_types %in% c("clonal_loss", "subclonal_loss"), -abs(stats), stats))
+
+# Parameters -------------------------------------------------------------------
+chromosome_order <- unique(df$chromosome)
+alter_colors <- c("subclonal_loss" = "#60C5D6", "clonal_loss" = "#2171b5", "subclonal_gain" = "#fc8d59",  "clonal_gain" = "#d7301f")
+
+labels <- ifelse(seq_along(chromosome_order) %% 2 == 0,
+                 paste0("\n", chromosome_order),  
+                 chromosome_order)
+
+
+png(file.path(image_dir, "bar_plot_CNV_all_samples_percentage_only_E.png"), width = 1450, height = 500, res = 120)
+print(df %>%
+        ggplot(aes(x = chromosome, y = stats, fill = factor(alteration_types, levels = names(alter_colors)))) +
+        geom_bar(stat = "identity", color = "black", position = "stack") +
+        scale_x_discrete(limits = chromosome_order, labels = labels) +
+        scale_fill_manual(limits = names(alter_colors), , values = alter_colors) +
+        scale_y_continuous(expand = c(-.3, 0.6), labels = scales::percent) +
+        theme_minimal() +
+        labs(x = "Chromosome", y = "Percentage of samples", fill = "Alterations types") +
+        theme(axis.text.x = element_text(size = 15, color = "black"),
+              axis.title.x = element_text(size = 15), 
+              axis.text.y = element_text(size = 15, color = "black"),
+              axis.title.y = element_text(size = 15),
+              legend.text = element_text(size = 15, color = "black"),
+              legend.title = element_text(size = 15)))
+dev.off()
