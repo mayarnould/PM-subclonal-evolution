@@ -1,0 +1,49 @@
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(magrittr)
+
+# Parameter --------------------------------------------------------------------
+name_tumors <- c("T267", "T278_C", "T343_C", "T043", "T093", "T094", "T201_B", "T038", 
+                 "T161NE", "T111NE", "T277HP-A", "T325HP", "T227LE-A", "T255HP", "T265HP")[1]
+
+counts_matrix_already_saved = FALSE
+
+#Function ----------------------------------------------------------------------
+LoadRdata <- function(file_name, quiet = F) {
+  if (file.exists(file_name)) return(eval(parse(text = load(file_name))))
+  cat(paste("error - function geco.load : file", file_name, "not found"))
+  NULL
+}
+
+##############################
+##### TABLE PREPARATION ######
+##############################
+
+##### Count matrix tables #####
+#------------------------------
+# Load seurat object ---------------------------------
+MPM <- readRDS(file.path("obj_snRNAseq_tumor.rds"))
+MPM <- MPM %>% 
+  subset(orig.ident %in% name_tumors)
+
+# Load the count matrix --------------------------------------------------------
+if (!counts_matrix_already_saved) {
+  print("Recover the counts matrix of the seurat object")
+  counts_matrix <-  GetAssayData(MPM, assay = "RNA", slot="counts")
+  save(counts_matrix, file=file.path(glue::glue("counts_matrix_{name_tumors}.Rdata")))
+} else {
+  print("Recover the counts_matrix when you have already save it")
+  counts_matrix <- LoadRdata(file.path(glue::glue("counts_matrix_{name_tumors}_count_RNA.Rdata")))
+}
+
+#Load the seurat object with only half of HC_immune cells
+seurat_normal <- LoadRdata(file.path(glue::glue("{name_tumors}_HC_immune_half.Rdata")))
+normal_cells_for_CNV <- rownames(seurat_normal@meta.data)
+
+# ##### Annotation table #####
+annotation <- data.frame(cell = rownames(MPM@meta.data), type = NA) %>%
+  mutate(type = case_when(cell %in% normal_cells_for_CNV ~ "normal",
+                          !cell %in% normal_cells_for_CNV~ "other"))
+write.table(annotation, file=file.path(glue::glue("cell_annotations_{name_tumors}_with_half_normal.txt")), sep = "\t", row.names = F)
+
