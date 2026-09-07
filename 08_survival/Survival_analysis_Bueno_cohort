@@ -1,0 +1,185 @@
+library(readxl)
+library(survival)
+library(survminer)
+library(ggplot2)
+library(dplyr)
+
+# load metadata ----------------------------------------------------------------
+metadata <- read_xlsx(file.path("Annotation_Bueno.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  select(rna_id, hitology_eval_based_on_percent, os_status, os_time)
+
+# Load output clustering 
+cluster <- read.table("clustering_k3_bueno.txt")
+metadata$rna_id <- paste0("X", metadata$rna_id)
+
+cluster <- cluster %>% 
+  mutate(groups = case_when(Cluster == 1 ~ "sc-I",
+                            Cluster == 2 ~ "sc-E",
+                            Cluster == 3 ~ "sc-S")) %>% 
+  mutate(rna_id = Tumeur)
+
+metadata <- metadata %>% 
+  filter(rna_id %in% cluster$Tumeur) 
+  
+metadata <- metadata %>% 
+  left_join(cluster, by = "rna_id")
+
+metadata$groups  <- factor(metadata$groups, levels = c("sc-E", "sc-I", "sc-S"))
+
+metadata$os_time <- as.numeric(metadata$os_time)
+
+metadata <- metadata %>% 
+  mutate(etat_60 = ifelse(os_time > 60, 0, os_status),
+         Survie_60 = ifelse(os_time > 60, 60, os_time))
+
+surv_object <- Surv(time = metadata$Survie_60, event = metadata$etat_60)
+
+fit <- survfit(surv_object ~ groups, data = metadata)
+
+summary(fit)$table
+
+p <- ggsurvplot(fit,
+                data = metadata,
+                pval = TRUE,          
+                conf.int = FALSE,      
+                risk.table = TRUE,    
+                legend.title = "",
+                legend.labs = levels(metadata$groups),
+                palette = c("#3e7d9c", "#d678a3", "#802525"),
+                xlab = "Time (months)",
+                ylab = "Overall survival frequency",
+                risk.table.title = "Patients at risk (n)",
+                risk.table.y.text = TRUE,
+                risk.table.y.text.col = TRUE)
+
+
+p$plot <- p$plot +
+  theme(legend.text = element_blank(),
+        legend.title = element_blank(),
+        axis.title.x = element_text("Time (months)"),
+        axis.title.y = element_text("Overall survival frequency"))
+
+
+png(file.path("survie_E_I_S_all_histo_bueno.png"), width = 650, height = 760, res = 120)
+print(p)
+dev.off()
+
+# Statistic test (log-rank)
+survdiff(surv_object ~ groups, data = metadata)
+
+################################################################################
+# Only MME histology
+
+# load metadata ----------------------------------------------------------------
+metadata <- read_xlsx(file.path("Annotation_Bueno.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  select(rna_id, hitology_eval_based_on_percent, os_status, os_time)
+
+# Load output clustering 
+cluster <- read.table("clustering_k3_bueno.txt")
+metadata$rna_id <- paste0("X", metadata$rna_id)
+
+cluster <- cluster %>% 
+  mutate(groups = case_when(Cluster == 1 ~ "sc-I",
+                            Cluster == 2 ~ "sc-E",
+                            Cluster == 3 ~ "sc-S")) %>% 
+  mutate(rna_id = Tumeur)
+
+metadata <- metadata %>% 
+  filter(rna_id %in% cluster$Tumeur) %>% 
+  filter(hitology_eval_based_on_percent == "Epithelioid")
+
+# keep only 111 sample
+metadata <- metadata %>% 
+  left_join(cluster, by = "rna_id")
+
+metadata$groups  <- factor(metadata$groups, levels = c("sc-E", "sc-I"))
+
+metadata$os_time <- as.numeric(metadata$os_time)
+
+metadata <- metadata %>% 
+  mutate(etat_60 = ifelse(os_time > 60, 0, os_status),
+         Survie_60 = ifelse(os_time > 60, 60, os_time))
+
+surv_object <- Surv(time = metadata$Survie_60, event = metadata$etat_60)
+
+fit <- survfit(surv_object ~ groups, data = metadata)
+
+p <- ggsurvplot(fit,
+                data = metadata,
+                pval = TRUE,          
+                conf.int = FALSE,      
+                risk.table = TRUE,    
+                legend.title = "",
+                legend.labs = levels(metadata$groups),
+                palette = c("#3e7d9c", "#d678a3"),
+                xlab = "Time (months)",
+                ylab = "Overall survival frequency",
+                risk.table.title = "Patients at risk (n)",
+                risk.table.y.text = TRUE,
+                risk.table.y.text.col = TRUE)
+
+png(file.path("survie_E_I_histo_MME_bueno.png"), width = 650, height = 760, res = 120)
+print(p)
+dev.off()
+
+
+# Fisher exact test for histology ----------------
+# load metadata ----------------------------------------------------------------
+metadata <- read_xlsx(file.path("Annotation_Bueno.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  select(rna_id, hitology_eval_based_on_percent, os_status, os_time)
+
+# Load output clustering 
+cluster <- read.table("clustering_k3_bueno.txt")
+metadata$rna_id <- paste0("X", metadata$rna_id)
+
+setdiff(metadata$rna_id, cluster$Tumeur)
+setdiff(cluster$Tumeur, metadata$rna_id)
+
+cluster <- cluster %>% 
+  mutate(groups = case_when(Cluster == 1 ~ "sc-I",
+                            Cluster == 2 ~ "sc-E",
+                            Cluster == 3 ~ "sc-S")) %>% 
+  mutate(rna_id = Tumeur)
+
+metadata <- metadata %>% 
+  filter(rna_id %in% cluster$Tumeur) 
+
+metadata <- metadata %>% 
+  left_join(cluster, by = "rna_id")
+
+metadata$groups  <- factor(metadata$groups, levels = c("sc-E", "sc-I", "sc-S"))
+
+metadata <- metadata %>% 
+  filter(!hitology_eval_based_on_percent == "NA")
+
+fisher.test(table(metadata$hitology_eval_based_on_percent , metadata$groups))
+
+
+# Test for association with S.score ----------------
+metadata <- read_xlsx(file.path("Annotation_Bueno.xlsx")) %>% 
+  janitor::clean_names()
+
+# Load output clustering 
+cluster <- read.table("clustering_k3_bueno.txt")
+metadata$rna_id <- paste0("X", metadata$rna_id)
+
+cluster <- cluster %>% 
+  mutate(groups = case_when(Cluster == 1 ~ "sc-I",
+                            Cluster == 2 ~ "sc-E",
+                            Cluster == 3 ~ "sc-S")) %>% 
+  mutate(rna_id = Tumeur)
+
+metadata <- metadata %>% 
+  filter(rna_id %in% cluster$Tumeur) 
+
+metadata <- metadata %>% 
+  left_join(cluster, by = "rna_id")
+
+metadata$groups  <- factor(metadata$groups, levels = c("sc-E", "sc-I", "sc-S"))
+metadata$s_score_norm <- as.numeric(metadata$s_score_norm)
+
+kruskal.test(s_score_norm ~ groups, data = metadata)
+pairwise.wilcox.test(metadata$s_score_norm, metadata$groups, p.adjust.method = "BH")
