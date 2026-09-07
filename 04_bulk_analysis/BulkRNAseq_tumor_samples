@@ -149,7 +149,7 @@ clustering_cos
 
 
 
-png(file.path(plot_dir, "Deconvolution_clustering/Deconv_CIBERSORT_linear_regression_E_S_final.png"), 
+png(file.path("Deconv_CIBERSORT_linear_regression_E_S_final.png"), 
     width = 1000, height = 1000, res = 120)
 print(clustering_cos)
 dev.off()
@@ -165,7 +165,7 @@ cluster_data <- data.frame(
   Cluster = as.factor(column_groups)
 )
 
-write.table(cluster_data, file.path(files_dir, "k4_clustering_tumor_sample.txt"), sep = "\t")
+write.table(cluster_data, file.path("k4_clustering_tumor_sample.txt"), sep = "\t")
 
 
 
