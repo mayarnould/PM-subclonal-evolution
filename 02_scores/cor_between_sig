@@ -1,0 +1,283 @@
+library(readxl)
+
+LoadRData <- function(file.name, print.dim = TRUE, print.real.name = TRUE) {
+  file.real.name <- load(file.name, verbose = print.real.name)
+  if (print.dim) cat("dimensions: ", dim(get(file.real.name)))
+  get(file.real.name)
+}
+
+## ===========================================================================
+## PARAMETERS 
+## ===========================================================================
+
+## --- 1. Dataset ------------------------------------------------------------
+## Change the index to select the dataset.
+
+dataset <- c("cell_lines", "tumors", "bueno", "tcga", "mesomics")[5]
+
+table_path    <- "Supplementary_Table 1-4.xlsx"
+
+## One file per dataset.
+DATASETS <- list(
+  cell_lines = "vst_cell_lines_58s.rds",
+  tumors     = "vst_97s_final.Rdata",
+  mesomics   = "mat_log2_mesomics.rds",
+  bueno      = "vst_bueno.txt",
+  tcga       = "vst_TCGA.txt"
+)
+
+## --- 2. Signature ----------------------------------------------------------
+signature <- c("Bueno_ratio", "Markers_WISP_cl", "Markers_WISP_tumor",
+               "Severson", "Mangiante_morpho")[5]
+
+SIGNATURES <- list(
+  
+  Bueno_ratio = list(
+    mode = "ratio",
+    num  = "CLDN15",
+    den  = "VIM"
+  ),
+  
+  Markers_WISP_cl = list(
+    mode = "list",
+    E = list(file = "Supplementary_Table 1-4.xlsx", sheet = "Table S2.2",
+             skip = 2, column = "Epithelioid markers"),
+    S = list(file = "Supplementary_Table 1-4.xlsx", sheet = "Table S2.2",
+             skip = 2, column = "Sarcomatoid markers")
+  ),
+  
+  Markers_WISP_tumor = list(
+    mode = "list",
+    E = list(file = "gene_E_blum.xlsx", column = 1),
+    S = list(file = "gene_S_blum.xlsx", column = 1)
+  ),
+  
+  Severson = list(
+    mode = "list",
+    E = list(file = "severson_E.xlsx", column = 1),
+    S = list(file = "severson_S.xlsx", column = 1)
+  ),
+  
+  Mangiante_morpho = list(
+    mode = "score",
+    files = list(
+      cell_lines = list(file = "morpho_cell_lines.xlsx",
+                        id = "sample", score = "morpho"),
+      bueno      = list(file = "morpho_bueno.xlsx",
+                        id = "sample", score = "morpho"),
+      tcga       = list(file = "morpho_tcga.xlsx",
+                        id = "sample", score = "morpho"),
+      mesomics   = list(file = "morpho_mesomics.xlsx",
+                        id = "sample", score = "morpho")
+    )
+  )
+)
+
+## --- 3. Reference signature (ours) -----------------------------------------
+
+gene_E_S <- read_xlsx(table_path, sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+
+cor_method <- "spearman"
+outdir     <- "results_signature_correlations"
+f_summary  <- file.path(outdir, "summary_correlations.csv")
+
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+## ===========================================================================
+## FUNCTIONS
+## ===========================================================================
+
+load_matrix <- function(path) {
+  if (!file.exists(path)) stop("file not found: ", path)
+  m <- if (grepl("\\.rds$", path, ignore.case = TRUE)) {
+    readRDS(path)
+  } else if (grepl("\\.xlsx$", path, ignore.case = TRUE)) {
+    x <- readxl::read_xlsx(path)
+    y <- as.data.frame(x[, -1]); rownames(y) <- x[[1]]; y
+  } else if (grepl("\\.Rdata$", path, ignore.case = TRUE)) {
+    LoadRData(path)
+  } else {
+    read.table(path, header = TRUE, check.names = FALSE)
+  }
+  as.matrix(m)
+}
+
+read_genes <- function(spec) {
+  path <- spec$file
+  if (!file.exists(path)) stop("file not found: ", path)
+  
+  if (grepl("\\.xlsx$", path, ignore.case = TRUE)) {
+    x <- readxl::read_xlsx(path,
+                           sheet = if (is.null(spec$sheet)) 1 else spec$sheet,
+                           skip  = if (is.null(spec$skip))  0 else spec$skip)
+    colnames(x) <- trimws(colnames(x))
+    v <- x[[spec$column]]
+  } else {
+    v <- readLines(path)
+  }
+  
+  v <- trimws(gsub('"', "", as.character(v)))
+  v <- sub("^\\s*\\d+\\s*\t", "", v)          
+  unique(v[!is.na(v) & nzchar(v) & !v %in% c("x", "V1", "gene", "NA")])
+}
+
+make_score <- function(mat, genes, label) {
+  g <- intersect(genes, rownames(mat))
+  cat(sprintf("  %-22s %d / %d genes found\n", label, length(g), length(genes)))
+  if (length(g) < 3) stop("fewer than 3 genes found for ", label)
+  list(v = colMeans(mat[g, , drop = FALSE]), n = length(g), n_tot = length(genes))
+}
+
+## ===========================================================================
+## LOADING
+## ===========================================================================
+
+f_expr <- DATASETS[[dataset]]
+mat <- load_matrix(f_expr)
+
+cat("=====", dataset, ":", nrow(mat), "genes x", ncol(mat), "samples =====\n")
+
+if (max(mat, na.rm = TRUE) > 100)
+  warning("High values (max = ", round(max(mat, na.rm = TRUE)),
+          "): the matrix looks linear. Log-transform it first.")
+
+cat("\nReference signature:\n")
+sE <- make_score(mat, gene_E, "sc-Epithelioid")
+sS <- make_score(mat, gene_S, "sc-Sarcomatoid")
+E <- sE$v; S <- sS$v
+
+## ===========================================================================
+## EXTERNAL SIGNATURE AND CORRELATIONS
+## ===========================================================================
+
+sig_def <- SIGNATURES[[signature]]
+cat("\nSignature tested:", signature, "(mode", sig_def$mode, ")\n")
+
+results <- list()
+
+if (sig_def$mode == "score") {
+  
+  spec <- sig_def$files[[dataset]]
+  if (is.null(spec)) stop("no score defined for dataset ", dataset)
+  
+  meta <- if (grepl("\\.xlsx$", spec$file, ignore.case = TRUE)) {
+    as.data.frame(readxl::read_xlsx(spec$file))
+  } else {
+    read.delim(spec$file, check.names = FALSE)
+  }
+  
+  sig <- suppressWarnings(as.numeric(meta[[spec$score]]))
+  names(sig) <- as.character(meta[[spec$id]])
+  
+  shared <- intersect(colnames(mat), names(sig))
+  cat(sprintf("  %-22s %d / %d samples matched\n",
+              "morphology score", length(shared), ncol(mat)))
+  if (length(shared) < 5) stop("fewer than 5 matched samples: check identifiers")
+  
+  sig <- sig[shared]
+  E_c <- E[shared]; S_c <- S[shared]
+  ok  <- !is.na(sig)
+  sig <- sig[ok]; E_c <- E_c[ok]; S_c <- S_c[ok]
+  
+  for (pole in c("E", "S")) {
+    y  <- if (pole == "E") E_c else S_c
+    ct <- cor.test(sig, y, method = cor_method, exact = FALSE)
+    results[[pole]] <- data.frame(
+      dataset = dataset, signature = signature,
+      comparison = paste0("morphology score vs sc-",
+                          ifelse(pole == "E", "Epithelioid", "Sarcomatoid")),
+      n_samples = length(sig), n_genes_signature = NA,
+      rho = round(unname(ct$estimate), 3), p = signif(ct$p.value, 3))
+  }
+  
+  scores_sig <- data.frame(morpho = round(sig, 3))
+  E <- E_c; S <- S_c   # for the plots
+  
+} else if (sig_def$mode == "ratio") {
+  
+  missing_genes <- setdiff(c(sig_def$num, sig_def$den), rownames(mat))
+  if (length(missing_genes))
+    stop("gene absent: ", paste(missing_genes, collapse = ", "))
+  
+  sig <- as.numeric(mat[sig_def$num, ] - mat[sig_def$den, ])
+  cat(sprintf("  %-22s log2(%s / %s)\n", "ratio", sig_def$num, sig_def$den))
+  
+  for (pole in c("E", "S")) {
+    y  <- if (pole == "E") E else S
+    ct <- cor.test(sig, y, method = cor_method, exact = FALSE)
+    results[[pole]] <- data.frame(
+      dataset = dataset, signature = signature,
+      comparison = paste0(sig_def$num, "/", sig_def$den, " vs sc-",
+                          ifelse(pole == "E", "Epithelioid", "Sarcomatoid")),
+      n_samples = ncol(mat), n_genes_signature = 2,
+      rho = round(unname(ct$estimate), 3), p = signif(ct$p.value, 3))
+  }
+  scores_sig <- data.frame(signature = round(sig, 3))
+  
+} else {
+  
+  scores_sig <- data.frame(row.names = colnames(mat))
+  
+  for (pole in c("E", "S")) {
+    g  <- read_genes(sig_def[[pole]])
+    s  <- make_score(mat, g, paste0(signature, "_", pole))
+    y  <- if (pole == "E") E else S
+    ct <- cor.test(s$v, y, method = cor_method, exact = FALSE)
+    
+    results[[pole]] <- data.frame(
+      dataset = dataset, signature = signature,
+      comparison = paste0(signature, "_", pole, " vs sc-",
+                          ifelse(pole == "E", "Epithelioid", "Sarcomatoid")),
+      n_samples = ncol(mat),
+      n_genes_signature = paste0(s$n, "/", s$n_tot),
+      rho = round(unname(ct$estimate), 3), p = signif(ct$p.value, 3))
+    
+    scores_sig[[paste0(signature, "_", pole)]] <- round(s$v, 3)
+  }
+}
+
+res <- do.call(rbind, results)
+
+cat("\n===== RESULTS =====\n")
+print(res, row.names = FALSE)
+
+## ===========================================================================
+## OUTPUT
+## ===========================================================================
+
+## Cumulative summary: each run adds or replaces its own rows
+if (file.exists(f_summary)) {
+  previous <- read.csv(f_summary, stringsAsFactors = FALSE)
+  previous <- previous[!(previous$dataset == dataset &
+                           previous$signature == signature), ]
+  res_all <- rbind(previous, res)
+} else {
+  res_all <- res
+}
+write.csv(res_all, f_summary, row.names = FALSE)
+cat("\nSummary updated:", f_summary, " (", nrow(res_all), "rows )\n")
+
+## One scatter plot per comparison
+png(file.path(outdir, paste0("plot_", dataset, "_", signature, ".png")),
+    width = 1200, height = 600, res = 110)
+par(mfrow = c(1, 2))
+for (pole in c("E", "S")) {
+  x <- if (sig_def$mode == "ratio") sig
+  else if (sig_def$mode == "score") scores_sig$morpho
+  else scores_sig[[paste0(signature, "_", pole)]]
+  y <- if (pole == "E") E else S
+  plot(x, y, pch = 19, col = "grey30",
+       xlab = if (sig_def$mode == "ratio")
+         paste0("log2(", sig_def$num, "/", sig_def$den, ")")
+       else if (sig_def$mode == "score") "Morphology score"
+       else paste0(signature, " ", pole),
+       ylab = paste0("sc-", ifelse(pole == "E", "Epithelioid", "Sarcomatoid")),
+       main = sprintf("%s  (rho = %.2f)", dataset,
+                      cor(x, y, method = cor_method)))
+  abline(lm(y ~ x), col = "red", lty = 2)
+}
+dev.off()
