@@ -1,0 +1,129 @@
+library(Seurat)
+library(dplyr)
+library(readxl)
+
+## ---------------------------------------------------------------------------
+## 1. PARAMETERS
+## ---------------------------------------------------------------------------
+
+obj_path     <- "obj_scRNAseq_cell_lines.rds"
+pc_files_path <- "pos_pc1_cell_lines.txt"
+
+obj <- readRDS(obj_path)
+pc_files <- read.table(pc_files_path)
+
+obj <- obj %>% 
+  AddMetaData(pc_files)
+
+table_path   <- "Supplementary_Table 1-4.xlsx"
+
+x <- read_xlsx(table_path, sheet = "Table S2.2", .name_repair = "minimal")
+colnames(x) <- as.character(unlist(x[2, ])); x <- x[-c(1, 2), ]
+gene_E <- na.omit(x$`Epithelioid markers`)
+gene_S <- na.omit(x$`Sarcomatoid markers`)
+
+obj$e_markers_bulk <- apply(GetAssayData(object=obj, slot="data", assay = "RNA")[gene_E,], 2, mean)
+obj$s_markers_bulk <- apply(GetAssayData(object=obj, slot="data", assay = "RNA")[gene_S,], 2, mean)
+
+obj@meta.data %>% 
+  ggplot(aes(x = PC_1, y = s_markers_bulk)) +
+  geom_point(aes(color = s_markers_bulk)) +
+  scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20')) +
+  theme_bw() +
+  labs(x = "PC 1", y = "Expression sarcomatoid markers from bulk") +
+  theme(axis.text.x = element_text(size = 15, color = "black"),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_blank())
+
+obj@meta.data %>% 
+  ggplot(aes(x = PC_1, y = e_markers_bulk)) +
+  geom_point(aes(color = e_markers_bulk)) +
+  scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20')) +
+  theme_bw() +
+  labs(x = "PC 1", y = "Expression epithelioid markers from bulk") +
+  theme(axis.text.x = element_text(size = 15, color = "black"),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_blank())
+
+cor.test(obj@meta.data$PC_1, obj@meta.data$s_markers_bulk, method = "spearman")
+cor.test(obj@meta.data$PC_1, obj@meta.data$e_markers_bulk, method = "spearman")
+
+################################################################################
+# Signature bulk tumor (wisp) ------------------
+gene_E_bulk <- read_xlsx(file.path("gene_E_blum.xlsx"))
+gene_E_bulk <- gene_E_bulk$gene_E_blum
+gene_E_bulk <- intersect(gene_E_bulk, rownames(obj))
+
+gene_S_bulk <- read_xlsx(file.path("gene_S_blum.xlsx"))
+gene_S_bulk <- gene_S_bulk$gene_S_blum
+gene_S_bulk <- intersect(gene_S_bulk, rownames(obj))
+
+obj$e_markers_bulk_tumor <- apply(GetAssayData(object=obj, slot="data", assay = "RNA")[gene_E_bulk,], 2, mean)
+obj$s_markers_bulk_tumor <- apply(GetAssayData(object=obj, slot="data", assay = "RNA")[gene_S_bulk,], 2, mean)
+
+
+obj@meta.data %>% 
+  ggplot(aes(x = PC_1, y = s_markers_bulk_tumor)) +
+  geom_point(aes(color = s_markers_bulk_tumor)) +
+  scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20')) +
+  theme_bw() +
+  labs(x = "PC 1", y = "Expression sarcomatoid markers from bulk") +
+  theme(axis.text.x = element_text(size = 15, color = "black"),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_blank())
+
+obj@meta.data %>% 
+  ggplot(aes(x = PC_1, y = e_markers_bulk_tumor)) +
+  geom_point(aes(color = e_markers_bulk_tumor)) +
+  scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20')) +
+  theme_bw() +
+  labs(x = "PC 1", y = "Expression epithelioid markers from bulk") +
+  theme(axis.text.x = element_text(size = 15, color = "black"),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_blank())
+
+cor.test(obj@meta.data$PC_1, obj@meta.data$s_markers_bulk_tumor, method = "spearman")
+cor.test(obj@meta.data$PC_1, obj@meta.data$e_markers_bulk_tumor, method = "spearman")
+
+
+################################################################################
+# Signature Severson  ------------------
+severson_E <- read_xlsx(file.path("severson_E.xlsx"))
+severson_E <- severson_E$gene_E
+severson_E <- intersect(severson_E, rownames(obj))
+
+severson_S <- read_xlsx(file.path("severson_S.xlsx"))
+severson_S <- severson_S$gene_S
+severson_S <- intersect(severson_S, rownames(obj))
+
+obj$severson_e <- apply(GetAssayData(object=obj, slot="data", assay = "RNA")[severson_E,], 2, mean)
+obj$severson_s <- apply(GetAssayData(object=obj, slot="data", assay = "RNA")[severson_S,], 2, mean)
+
+obj@meta.data %>% 
+  ggplot(aes(x = PC_1, y = severson_s)) +
+  geom_point(aes(color = severson_s)) +
+  scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20')) +
+  theme_bw() +
+  labs(x = "PC 1", y = "Expression sarcomatoid markers from severson") +
+  theme(axis.text.x = element_text(size = 15, color = "black"),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_blank())
+
+obj@meta.data %>% 
+  ggplot(aes(x = PC_1, y = severson_e)) +
+  geom_point(aes(color = severson_e)) +
+  scale_color_gradientn(colors = c('#FBF6B8', '#F5D8AE', '#E88976', '#9B4577', '#1B0A20')) +
+  theme_bw() +
+  labs(x = "PC 1", y = "Expression epithelioid markers from severson") +
+  theme(axis.text.x = element_text(size = 15, color = "black"),
+        axis.title.x = element_text(size = 15), 
+        axis.text.y = element_text(size = 15, color = "black"),
+        axis.title.y = element_blank())
+
+cor.test(obj@meta.data$PC_1, obj@meta.data$severson_s, method = "pearson")
+cor.test(obj@meta.data$PC_1, obj@meta.data$severson_e, method = "pearson")
