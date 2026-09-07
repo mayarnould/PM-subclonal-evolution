@@ -1,0 +1,181 @@
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+
+## ---------------------------------------------------------------------------
+## 1. PARAMETERS
+## ---------------------------------------------------------------------------
+
+col_sample <- "manuscript_id"   # column identifying the sample
+min_cells  <- 200             # minimum number of malignant cells per sample
+
+obj <- readRDS("severson_GSE327167_scored.rds")
+
+## Keep only samples with enough malignant cells, before computing the scores,
+n_par_ech <- table(obj@meta.data[[col_sample]])
+garder    <- names(n_par_ech)[n_par_ech >= min_cells]
+obj <- subset(obj, cells = colnames(obj)[obj@meta.data[[col_sample]] %in% garder])
+
+cat("Samples kept :", length(garder), "|", ncol(obj), "malignant cells\n")
+
+table_path    <- "Supplementary_Table 1-4.xlsx"
+
+THR_T  <- 0.30
+THR_R1 <- 0.40
+THR_R2 <- 0.70
+
+outdir <- "classif_severson"
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+col_annot_severson <- "stringent_cell_class"
+
+## ---------------------------------------------------------------------------
+## 2. MEDIANS BY SAMPLE AND CLASSIFICATION
+## ---------------------------------------------------------------------------
+classer <- function(med_T, med_r) {
+  if (is.na(med_T) || is.na(med_r)) return(NA_character_)
+  if (med_T < THR_T)  return("sc-ND")
+  if (med_r < THR_R1) return("sc-E")
+  if (med_r < THR_R2) return("sc-I")
+  "sc-S"
+}
+
+plus_grand_vide <- function(v) {
+  v <- sort(v[is.finite(v)]); e <- diff(v); i <- which.max(e)
+  c(seuil = mean(c(v[i], v[i+1])), largeur = e[i])
+}
+
+gene_E_S <- read_xlsx(table_path, sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1, 2), ]
+gene_E <- na.omit(gene_E_S$`Epithelioid markers`)
+gene_S <- na.omit(gene_E_S$`Sarcomatoid markers`)
+
+score_set <- function(obj, genes) {
+  genes <- intersect(genes, rownames(obj))
+  as.numeric(Matrix::colMeans(LayerData(obj, assay = "RNA", layer = "data")[genes, ]))
+}
+
+E <- score_set(obj, gene_E)
+S <- score_set(obj, gene_S)
+
+obj$epi_score   <- E / max(E, na.rm = TRUE)
+obj$sarco_score <- S / max(S, na.rm = TRUE)
+obj$T_score     <- obj$epi_score + obj$sarco_score
+obj$r_score     <- ifelse(obj$T_score > 1e-8, obj$sarco_score / obj$T_score, NA)
+
+
+df <- obj@meta.data %>%
+  rename(sample = all_of(col_sample))
+
+res <- df %>%
+  group_by(sample) %>%
+  summarise(n_cellules = n(),
+            med_T = median(T_score,     na.rm = TRUE),
+            med_r = median(r_score,     na.rm = TRUE),
+            .groups = "drop") %>%
+  mutate(sous_type = mapply(classer, med_T, med_r)) %>%
+  arrange(med_r)
+
+## ---------------------------------------------------------------------------
+## 3. COMPARISON WITH SEVERSON'S ANNOTATION
+## ---------------------------------------------------------------------------
+
+if (!is.null(col_annot_severson)) {
+  annot <- df %>%
+    group_by(sample) %>%
+    summarise(annot_severson = names(sort(table(.data[[col_annot_severson]]),
+                                          decreasing = TRUE))[1],
+              .groups = "drop")
+  res <- left_join(res, annot, by = "sample")
+  
+  cat("\n===== SUBTYPE vs. SEVERSON ANNOTATION =====\n")
+  print(table(res$sous_type, res$annot_severson))
+  print(fisher.test(table(res$sous_type, res$annot_severson),
+                    simulate.p.value = TRUE, B = 1e5))
+}
+
+write.csv(res, file.path(outdir, "severson_classification_samples.csv"), row.names = FALSE)
+
+
+r_ok <- sort(res$med_r[res$med_T >= THR_T])
+e <- diff(r_ok); i2 <- sort(order(e, decreasing = TRUE)[1:2])
+c(r1 = mean(c(r_ok[i2[1]], r_ok[i2[1]+1])),
+  r2 = mean(c(r_ok[i2[2]], r_ok[i2[2]+1])))
+
+u <- sort(res$med_T)
+e <- diff(u); i <- which.max(e)
+c(seuil = mean(c(u[i], u[i+1])), bas = u[i], haut = u[i+1], largeur = e[i])
+
+marge <- function(v, thr, nom) {
+  v <- sort(v[is.finite(v)])
+  bas  <- if (any(v < thr)) max(v[v < thr]) else NA
+  haut <- if (any(v > thr)) min(v[v > thr]) else NA
+  data.frame(threshold = nom, value = thr,
+             low = round(bas, 3), high = round(haut, 3),
+             margin_low  = round(100 * (thr - bas)  / thr, 1),
+             margin_high = round(100 * (haut - thr) / thr, 1))
+}
+
+rbind(marge(res$med_T, THR_T,  "T"),
+      marge(res$med_r, THR_R1, "r1"),
+      marge(res$med_r, THR_R2, "r2"))
+
+
+
+gap_threshold <- function(v, n = 1) {
+  v <- sort(v[is.finite(v)])
+  e <- diff(v)
+  idx <- sort(order(e, decreasing = TRUE)[1:n])
+  data.frame(low = round(v[idx], 3), high = round(v[idx + 1], 3),
+             width = round(e[idx], 3),
+             derived = round((v[idx] + v[idx + 1]) / 2, 3))
+}
+
+r_ok <- res$med_r[res$med_T >= THR_T]
+
+rbind(
+  cbind(threshold = "T",  gap_threshold(res$med_T, 1)),
+  cbind(threshold = c("r1", "r2"), gap_threshold(r_ok, 2))
+)
+
+
+## ---------------------------------------------------------------------------
+## Invariance intervals and margins around our thresholds
+## ---------------------------------------------------------------------------
+
+margin <- function(v, thr, nom) {
+  v <- sort(v[is.finite(v)])
+  low  <- if (any(v < thr)) max(v[v < thr]) else NA
+  high <- if (any(v > thr)) min(v[v > thr]) else NA
+  data.frame(threshold = nom, value = thr,
+             low = round(low, 3), high = round(high, 3),
+             margin_low  = round(100 * (thr - low)  / thr, 1),
+             margin_high = round(100 * (high - thr) / thr, 1))
+}
+
+r_ok <- res$med_r[res$med_T >= THR_T]
+
+cat("\n=== INVARIANCE INTERVALS AROUND OUR THRESHOLDS ===\n")
+print(rbind(margin(res$med_T, THR_T,  "T"),
+            margin(r_ok,      THR_R1, "r1"),
+            margin(r_ok,      THR_R2, "r2")), row.names = FALSE)
+
+## ---------------------------------------------------------------------------
+## Thresholds that would be derived from this cohort alone
+## ---------------------------------------------------------------------------
+
+gap_threshold <- function(v, n = 1) {
+  v <- sort(v[is.finite(v)])
+  e <- diff(v)
+  idx <- sort(order(e, decreasing = TRUE)[1:n])
+  data.frame(low = round(v[idx], 3), high = round(v[idx + 1], 3),
+             width = round(e[idx], 3),
+             derived = round((v[idx] + v[idx + 1]) / 2, 3))
+}
+
+cat("\n=== THRESHOLDS DERIVED FROM THE LARGEST GAPS ===\n")
+print(rbind(cbind(threshold = "T", gap_threshold(res$med_T, 1)),
+            cbind(threshold = c("r1", "r2"), gap_threshold(r_ok, 2))),
+      row.names = FALSE)
