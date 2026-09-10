@@ -1,0 +1,418 @@
+library(readxl)
+library(ggplot2)
+library(dplyr)
+
+################################################################################
+# Cell lines
+################################################################################
+
+# BULK
+
+# load metadata ----------------------------------------------------------------
+metadata_bulk_cl <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S1.2") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_2_annotations_of_the_cohort_of_pleural_mesothelioma_patient_derived_primary_cell_lines)) %>%
+  magrittr::set_colnames(.[1, ]) %>%
+  janitor::clean_names() %>%
+  filter(!cell_lines_id == "Cell lines ID")
+
+metadata_bulk_cl$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq <- factor(metadata_bulk_cl$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq,
+                                                                  levels = c("Epithelioid", "Non-differentiated", "Intermediate", "Sarcomatoid"))
+# For BAP1--------------
+plot_data <- metadata_bulk_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_bulk_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(bap1 != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_bulk_cl$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, metadata_bulk_cl$bap1))  
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq)) +
+  geom_col(width = 0.75, color = "black") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_text(size = 10), 
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_text(size = 10),
+        legend.text = element_blank(),
+        legend.position = "none")
+plot
+
+png(file.path("freq_BAP1_mut_types.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+# same thing with tert -------------------
+
+plot_data <- metadata_bulk_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_bulk_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(ter_tprom != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_bulk_cl$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, metadata_bulk_cl$ter_tprom))  
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq)) +
+  geom_col(width = 0.75, color = "black") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_text(size = 10), 
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_text(size = 10),
+        legend.text = element_blank(),
+        legend.position = "none")
+plot
+
+png(file.path("freq_TERT_mut_types.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+# Histology
+metadata_histo <- metadata_bulk_cl %>% 
+  filter(!histology == "NA")
+
+fisher.test(table(metadata_histo$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, metadata_histo$histology))
+
+################################################################################
+# single-cell
+metadata_sc_cl <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S1.2") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_2_annotations_of_the_cohort_of_pleural_mesothelioma_patient_derived_primary_cell_lines)) %>%
+  magrittr::set_colnames(.[1, ]) %>%
+  janitor::clean_names() %>%
+  filter(!cell_lines_id == "Cell lines ID") %>% 
+  filter(cell_lines_id %in% c("MPM_05", "MPM_07", "MPM_12", "MPM_16", "MPM_27", "MPM_28", "MPM_37",
+                              "MPM_59", "MPM_60", "MPM_70", "MPM_78", "MPM_82", "MPM_86", "MPM_87"))
+
+metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq <- factor(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq,
+                               levels = c("Epithelioid", "Non-differentiated", 
+                                          "Intermediate", "Sarcomatoid"))
+
+# with bap1 ------------
+plot_data <- metadata_sc_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(bap1 != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sc_cl$bap1))
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_sc_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_sc_rna_seq)) +
+  geom_col(width = 0.75, color = "black") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_text(size = 10), 
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_text(size = 10),
+        legend.text = element_blank(),
+        legend.position = "none")
+plot
+
+png(file.path("freq_BAP1_mut_types_scrnaseq.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+
+# with tert ------------
+plot_data <- metadata_sc_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(ter_tprom != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sc_cl$ter_tprom))
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_sc_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_sc_rna_seq)) +
+  geom_col(width = 0.75, color = "black") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_text(size = 10), 
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_text(size = 10),
+        legend.text = element_blank(),
+        legend.position = "none")
+plot
+
+png(file.path("freq_TERT_mut_types_scrnaseq.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+
+# with NF2 ------------
+plot_data <- metadata_sc_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(nf2 != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sc_cl$nf2))
+
+# with TP53 ------------
+plot_data <- metadata_sc_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(tp53 != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sc_cl$tp53))
+
+# with SETD2 ------------
+plot_data <- metadata_sc_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(setd2 != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sc_cl$setd2))
+
+# with gender ------------
+plot_data <- metadata_sc_cl %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(gender != "F"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sc_cl$gender))
+
+# with E.S.score ------------
+metadata_sc_cl$s_score <- as.numeric(metadata_sc_cl$s_score)
+
+kruskal.test(s_score ~ phenotypic_single_cell_subtypes_based_on_sc_rna_seq,
+             data = metadata_sc_cl)
+
+# Histology --------------------
+metadata_sc_cl <- metadata_sc_cl %>% 
+  filter(!histology == "NA")
+
+fisher.test(table(metadata_sc_cl$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sc_cl$histology))
+
+################################################################################
+# Tumor samples
+################################################################################
+
+metadata_bulk_tumor <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S1.1") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_1_annotations_of_the_cohort_of_pleural_mesothelioma_frozen_tumor_samples)) %>%
+  magrittr::set_colnames(.[1, ]) %>%
+  janitor::clean_names() %>%
+  filter(!tumors_id == "Tumors ID") %>% 
+  distinct(patient_id, .keep_all = TRUE)
+
+metadata_bulk_tumor$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq <- factor(metadata_bulk_tumor$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq,
+                                                                         levels = c("Epithelioid", "Non-differentiated", 
+                                                                                    "Intermediate", "Sarcomatoid"))
+
+# For BAP1--------------
+plot_data <- metadata_bulk_tumor %>% 
+  filter(!bap1 == "NA") %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_bulk_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(bap1 != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+metadata_bulk_tumor_bap1 <- metadata_bulk_tumor %>% 
+  filter(!bap1 == "NA")
+
+fisher.test(table(metadata_bulk_tumor_bap1$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, metadata_bulk_tumor_bap1$bap1))
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq)) +
+  geom_col(width = 0.75, col = "black") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57", "Sarcomatoid/Intermediate" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none")
+plot
+
+png(file.path("freq_BAP1_tumor_mut_types.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+# same thing with tert -------------------
+plot_data <- metadata_bulk_tumor %>% 
+  filter(!ter_tprom == "NA") %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_bulk_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(ter_tprom != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+metadata_bulk_tumor_tert <- metadata_bulk_tumor %>% 
+  filter(!ter_tprom == "NA")
+
+fisher.test(table(metadata_bulk_tumor_tert$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, metadata_bulk_tumor_tert$ter_tprom))
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_bulk_rna_seq)) +
+  geom_col(width = 0.75, col = "black") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57", "Sarcomatoid/Intermediate" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none")
+
+plot
+
+png(file.path("freq_TERT_tumor_mut_types.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+# Histology -------------------------------------------------------------------
+metadata_bulk_tumor <- metadata_bulk_tumor %>% 
+  filter(!histology == "NA")
+
+fisher.test(table(metadata_bulk_tumor$phenotypic_single_cell_subtypes_based_on_bulk_rna_seq, metadata_bulk_tumor$histology))
+
+################################################################################
+# single-nucleus
+
+metadata_sn_tumor <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S1.1") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_1_annotations_of_the_cohort_of_pleural_mesothelioma_frozen_tumor_samples)) %>%
+  magrittr::set_colnames(.[1, ]) %>%
+  janitor::clean_names() %>%
+  filter(!tumors_id == "Tumors ID") %>% 
+  filter(tumors_id %in% c("T038LE", "T043LE", "T093NE", "T094NE", "T111NE", "T161NE",
+                          "T201LE-B", "T255HP", "T227LE-A", "T265HP", "T267HP", "T277HP-A", 
+                          "T278HP-C", "T325HP", "T343HP-C"))
+  
+metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq <- factor(metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq,
+                         levels = c("Epithelioid", "Non-differentiated", 
+                                    "Intermediate", "Sarcomatoid/Intermediate", "Sarcomatoid"))
+
+# For BAP1--------------
+plot_data <- metadata_sn_tumor %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(bap1 != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sn_tumor$bap1))
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_sc_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_sc_rna_seq)) +
+  geom_col(width = 0.75, col = "black") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57", "Sarcomatoid/Intermediate" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none")
+plot
+
+png(file.path("freq_BAP1_sn_mut_types.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+# same thing with tert -------------------
+plot_data <- metadata_sn_tumor %>% 
+  group_by(phenotypic_single_cell_subtypes_based_on_sc_rna_seq) %>% 
+  summarise(
+    n_total = n(),
+    n_mut = sum(ter_tprom != "WT"),
+    freq_mut = n_mut/n_total
+  )
+
+fisher.test(table(metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sn_tumor$ter_tprom))
+
+plot <- plot_data %>% 
+  ggplot(aes(x = phenotypic_single_cell_subtypes_based_on_sc_rna_seq, y = freq_mut, fill = phenotypic_single_cell_subtypes_based_on_sc_rna_seq)) +
+  geom_col(width = 0.75, col = "black") +
+  scale_y_continuous(limits = c(0,1), labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Epithelioid" = "#F09F57", "Non-differentiated" = "#F09F57", 
+                               "Intermediate" = "#F09F57", "Sarcomatoid" = "#F09F57", "Sarcomatoid/Intermediate" = "#F09F57")) +
+  labs(x = "", y = "") +
+  theme_bw() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_text(size = 10, color = "black"),
+        axis.ticks.x = element_blank(),
+        legend.text = element_blank(),
+        legend.position = "none")
+
+plot
+
+png(file.path(plot_dir, "freq_TERT_sn_mut_types.png"), width = 340, height = 200, res = 120)
+print(plot)
+dev.off()
+
+# same thing with NF2 -------------------
+fisher.test(table(metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sn_tumor$nf2))
+
+# same thing with TP53 -------------------
+fisher.test(table(metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sn_tumor$tp53))
+
+# same thing with gender -------------------
+fisher.test(table(metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sn_tumor$gender))
+
+# with E.S.score ------------
+metadata_sn_tumor$s_score <- as.numeric(metadata_sn_tumor$s_score)
+
+kruskal.test(s_score ~ phenotypic_single_cell_subtypes_based_on_sc_rna_seq,
+             data = metadata_sn_tumor)
+
+
+# histology -------------------
+metadata_sn_tumor <- metadata_sn_tumor %>% 
+  filter(!histology == "NA")
+
+fisher.test(table(metadata_sn_tumor$phenotypic_single_cell_subtypes_based_on_sc_rna_seq, metadata_sn_tumor$histology))
