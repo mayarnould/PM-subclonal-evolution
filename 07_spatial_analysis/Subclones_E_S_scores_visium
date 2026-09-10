@@ -1,0 +1,113 @@
+library(ggplot2)
+library(Seurat)
+library(dplyr)
+
+# Load data --------------------------------------------------------------------
+visium <- readRDS(file.path("visium_T278HP.rds"))
+
+visium_tumor <- visium %>% 
+  subset(name_cluster %in% c("mix_tumor", "mix_immune_tumor"))
+
+# Load signature E and S from single-cell data 
+gene_E_S <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx"), sheet = "Table S3.2")
+colnames(gene_E_S) <- gene_E_S[2, ]
+gene_E_S <- gene_E_S[-c(1,2), ]  
+gene_E <- gene_E_S$`Epithelioid markers`
+gene_S <- gene_E_S$`Sarcomatoid markers`
+
+E_markers_list <- intersect(gene_E, rownames(visium_tumor))
+S_markers_list <- intersect(gene_S, rownames(visium_tumor))
+
+visium_tumor$epi_score <- apply(GetAssayData(object=visium_tumor, slot="data")[E_markers_list,], 2, mean)
+visium_tumor$sarco_score <- apply(GetAssayData(object=visium_tumor, slot="data")[S_markers_list,], 2, mean)
+
+visium_tumor@meta.data <- visium_tumor@meta.data %>% 
+  mutate(final_clone = case_when(cluster_infercnv == "other_s2" ~ "clonal",
+                                 cluster_infercnv == "other_s3" ~ "red_subclone",
+                                 cluster_infercnv == "other_s1" ~ "yellow_subclone"))
+
+cell_E_S_scores_df <- visium_tumor@meta.data %>%
+  select(epi_mean = epi_score,
+         sarco_mean = sarco_score,
+         orig.ident,
+         final_clone)
+
+# Create table for normalize each Emean and Smean by the maxEmean of cells
+maxEmean_cell <- cell_E_S_scores_df %>% pull(epi_mean) %>% max()
+maxSmean_cell <- cell_E_S_scores_df %>% pull(sarco_mean) %>% max()
+
+# For each cells
+cell_E_S_scores_df <- cell_E_S_scores_df %>% 
+  mutate(epi_mean_normalize = epi_mean/maxSmean_cell,
+         sarco_mean_normalize = sarco_mean/maxSmean_cell)
+
+# Depending of each tumors
+color_clones <- c("yellow_subclone" = "#fdbf6f", "clonal" = "#2f5597", "red_subclone" = "#ca0020")
+levels_clones <- names(color_clones) 
+
+
+E_Sscore_by_cells <- cell_E_S_scores_df %>%
+  filter(!is.na(final_clone)) %>% 
+  .[sample(nrow(.)), ] %>% 
+  ggplot(aes(x = epi_mean_normalize, y = sarco_mean_normalize, color = final_clone)) +
+  geom_point(size = 1) +
+  scale_y_continuous(limits = c(0,1), breaks = seq(0, 2, 0.1)) +
+  scale_x_continuous(limits = c(0,1), breaks = seq(0, 2, 0.1)) +
+  scale_color_manual(limits = levels_clones, values = color_clones, "clones") +
+  theme_bw() +
+  labs(x = "sc-Epithelioid score", y = "sc-Sarcomatoid score") +
+  theme(axis.text.x = element_text(size = 12, color = "black"),
+        axis.title.x = element_text(size = 20), 
+        axis.text.y = element_text(size = 12, color = "black"),
+        axis.title.y = element_text(size = 20),
+        legend.position = "none")
+E_Sscore_by_cells
+
+png(file.path(glue::glue("E_Sscore_cells_final_clones.png")), width = 610, height = 600, res = 120)
+print(E_Sscore_by_cells)
+dev.off()
+
+svg(file.path(glue::glue("E_Sscore_cells_final_clones.svg")), width = 610/120, height = 600/120)
+print(E_Sscore_by_cells)
+dev.off()
+
+
+
+for_ridge <- cell_E_S_scores_df %>%
+  mutate(sarco_mean_normalize_neg = -sarco_mean_normalize)
+
+ridgeplot <- for_ridge %>% 
+  ggplot(aes(x = sarco_mean_normalize_neg, y = final_clone,  fill = final_clone)) +
+  ggridges::geom_density_ridges(scale = 5, size = 0.5, alpha = 0.8) +
+  geom_segment(data = . %>% distinct(final_clone),
+               aes(x = -0.162,
+                   xend = 0, y = final_clone, yend = final_clone),
+               inherit.aes = FALSE, color = "black", size = 0.5) +
+  scale_x_continuous(limits = c(-1, 0)) +
+  theme_void() +
+  scale_y_discrete(limits = levels_clones) +
+  scale_fill_manual(values = color_clones, guide = "none")
+ridgeplot
+
+svg(file.path("ridge_plot_clones.svg"), width = 700/120, height = 200/120)
+print(ridgeplot)
+dev.off()
+
+# Dimplot ----------------
+manual_col <- c("mix_Bcells_Tcells" = "#b03cff",
+                "mix_tumor" = "#E2A2A2",
+                "mix_fibroblast" = "#01af02",
+                "mix_immune_tumor" = "#8c4b16")
+
+umap <- DimPlot(visium, group.by = "name_cluster", cols = manual_col, pt.size = 2) +
+  theme_void() +
+  theme(legend.text = element_blank(),
+        legend.title = element_blank(),
+        legend.position = "none",
+        title = element_blank())
+
+umap
+
+svg(file.path("Umap_rename_cluster_graph_based_E_S.svg"), width = 1100/120, height = 900/120)
+print(umap)
+dev.off()
