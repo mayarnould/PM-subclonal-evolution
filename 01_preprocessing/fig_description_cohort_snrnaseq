@@ -1,0 +1,88 @@
+library(dplyr)
+library(ggplot2)
+library(readxl)
+library(ComplexHeatmap)
+
+# load annot tumor
+metadata <- read_xlsx(file.path("Supplementary_Table 1-4.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(supplementary_table_1_1_annotations_of_the_cohort_of_pleural_mesothelioma_frozen_tumor_samples)) %>% 
+  magrittr::set_colnames(.[1,]) %>% 
+  janitor::clean_names() %>% 
+  filter(!tumors_id == "Tumors ID") %>% 
+  filter(sn_rna_seq == "Yes")
+
+metadata$s_score <- as.numeric(metadata$s_score)
+
+metadata <- metadata %>% 
+  mutate(e_score = 1 - s_score)
+
+ordre_precis <- c("T201LE-B", "T161NE", "T094NE", "T265HP", "T325HP", "T343HP-C", "T277HP-A", "T227LE-A", 
+                  "T111NE", "T038LE", "T278HP-C", "T267HP", "T255HP", "T043LE", "T093NE")
+
+metadata <- metadata %>%
+  mutate(name_sample = factor(tumors_id, levels = ordre_precis)) %>%
+  arrange(name_sample)
+
+metadata <- metadata %>% 
+  mutate(good_name = case_when(name_sample == "T343HP-C" ~ "T343HP",
+                               name_sample == "T201LE-B" ~ "T201LE",
+                               name_sample == "T227LE-A" ~ "T227LE",
+                               name_sample == "T278HP-C" ~ "T278HP",
+                               name_sample == "T277HP-A" ~ "T277HP",
+                               T ~ name_sample))
+
+
+gender_cols <- c("M" = "#925AC7", "F" = "#1C9956")
+histo_cols <- c("E" = "#3194CA", "S" = "#B83243", "B" = "#D68340")
+cell_lines_cols <- c("MPM_82" = "red4", "MPM_78" = "red4", "MPM_70" = "red4", "MPM_86" = "red4", "NA" = "grey")
+mutation_cols <- c("M" = "#F09F57", "WT" = "white", "NA" = "grey")
+cell_types_col <- c("Epithelioid" = "#3e7d9c", "Non-differentiated" = "#6a3d98", "Intermediate" = "#d678a3", 
+                    "Sarcomatoid" = "#7f2525", "Sarcomatoid/Intermediate" = "#d678a3")
+
+
+annot_heatmap_final <- HeatmapAnnotation(
+  empty_1 = anno_empty(border = FALSE, height = unit(0.1, "cm")),
+  Gender = metadata$gender,
+  Histology = metadata$histology,
+  Cell_lines = metadata$derived_primary_cell_line,
+  BAP1 = metadata$bap1,
+  NF2 = metadata$nf2,
+  TERT_prom = metadata$ter_tprom,
+  TP53 = metadata$tp53,
+  empty_2 = anno_empty(border = FALSE, height = unit(.1, "cm")),
+  E_S_score = anno_barplot(select(metadata, e_score, s_score), height = unit(2, "cm"),
+                           bar_width = .95,
+                           gp = gpar(fill = c("#b2d1e0", "#cb4d4d"))),
+  empty_3 = anno_empty(border = FALSE, height = unit(.1, "cm")),
+  Type_cells = metadata$phenotypic_single_cell_subtypes_based_on_sc_rna_seq,
+  col = list(Gender = gender_cols,
+             Histology = histo_cols,
+             Cell_lines = cell_lines_cols,
+             BAP1 = mutation_cols,
+             NF2 = mutation_cols,
+             TERT_prom = mutation_cols,
+             TP53 = mutation_cols,
+             Type_cells = cell_types_col),
+  show_legend = F,
+  simple_anno_size = unit(0.5, "cm"))
+
+
+mat_decoy <- matrix(1, nrow = 1, ncol = nrow(metadata))
+colnames(mat_decoy) <- metadata$good_name
+
+heatmap <- Heatmap(mat_decoy, top_annotation = annot_heatmap_final, col = "white", 
+                   show_column_dend = F, cluster_columns = F,
+                   show_heatmap_legend = F,
+                   height = nrow(mat_decoy)*unit(2, "mm"),
+                   width = ncol(mat_decoy)*unit(5, "mm")) 
+heatmap
+
+png(file.path("description_cohort_15s_types_single_cells_T325_E_final.png"), width = 600, height = 800, res = 120)
+print(heatmap)
+dev.off()
+
+svg(file.path("description_cohort_15s_types_single_cells_final.svg"), width = 600/120, height = 800/120)
+print(heatmap)
+dev.off()
+
